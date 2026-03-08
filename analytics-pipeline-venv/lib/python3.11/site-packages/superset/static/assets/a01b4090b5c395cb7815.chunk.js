@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunksuperset=globalThis.webpackChunksuperset||[]).push([[2561],{75642:(s,e,r)=>{r.r(e),r.d(e,{default:()=>l});var u=r(2445),a=r(61574),t=r(36167);const l=()=>{const{idOrSlug:s}=(0,a.g)();return(0,u.Y)(t.DashboardPage,{idOrSlug:s})}}}]);
