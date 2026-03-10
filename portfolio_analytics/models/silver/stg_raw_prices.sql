@@ -1,3 +1,9 @@
+{{
+    config(
+        materialized='view'
+    )
+}}
+
 WITH source AS (
     SELECT * FROM {{ source('bronze', 'raw_prices') }}
 ),
@@ -15,5 +21,4 @@ staged AS (
     FROM source
 )
 
-SELECT * FROM staged
-LIMIT 20
+SELECT  * FROM staged

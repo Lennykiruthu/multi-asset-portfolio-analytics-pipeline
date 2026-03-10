@@ -1,0 +1,11 @@
+ticker,asset_name,asset_type,sector,shares_held,purchase_price_override
+AAPL,Apple Inc.,Stock,Technology,50,
+MSFT,Microsoft Corporation,Stock,Technology,30,
+GOOGL,Alphabet Inc.,Stock,Technology,20,
+TSLA,Tesla Inc.,Stock,Consumer Cyclical,15,
+SPY,S&P 500 ETF Trust,ETF,Equity - Broad,100,
+QQQ,Invesco QQQ Trust,ETF,Equity - Technology,75,
+VTI,Vanguard Total Stock Market ETF,ETF,Equity - Total Market,80,
+BTC-USD,Bitcoin,Crypto,Cryptocurrency,0.5,
+ETH-USD,Ethereum,Crypto,Cryptocurrency,2.0,
+GC=F,Gold Futures,Futures,Commodities,10,

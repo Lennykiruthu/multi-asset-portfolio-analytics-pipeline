@@ -1,5 +1,5 @@
 analytics-pipeline-venv/
-logs/
+**/logs/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
