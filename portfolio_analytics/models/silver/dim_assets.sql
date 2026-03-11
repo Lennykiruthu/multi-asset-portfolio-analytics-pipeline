@@ -91,7 +91,7 @@ with_weights AS (
             2
         ) AS weight_pct,
 
-        ROund(
+        ROUND(
             initial_investment
             / NULLIF(SUM(initial_investment) OVER (), 0),
             4

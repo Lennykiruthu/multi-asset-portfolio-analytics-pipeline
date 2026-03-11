@@ -1,4 +1,3 @@
 SELECT *
-FROM silver.
-ORDER BY price_date DESC
-LIMIT 25;
+FROM gold.gold_portfolio_summary
+LIMIT 50;
