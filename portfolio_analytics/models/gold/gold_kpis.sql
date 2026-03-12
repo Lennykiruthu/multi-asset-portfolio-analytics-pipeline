@@ -16,9 +16,9 @@ timeseries AS (
 -- Portfolio level KPIs from summary
 portfolio_snapshot AS (
     SELECT
-        ROUND(SUM(current_value), 2)                                                  AS total_portfolio_value,
-        ROUND(SUM(total_return_dollar), 2)                                            AS total_return_dollar,
-        ROUND(SUM(total_return_dollar) / NULLIF(SUM(initial_investment), 0) * 100, 2) AS total_return_pct
+        ROUND(SUM(current_value), 2)                                             AS total_portfolio_value,
+        ROUND(SUM(total_return_dollar), 2)                                       AS total_return_dollar,
+        ROUND(SUM(total_return_dollar) / NULLIF(SUM(initial_investment), 0), 2)  AS total_return_pct
     FROM summary
 ),
 
