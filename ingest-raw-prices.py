@@ -9,13 +9,14 @@ from datetime import datetime, timedelta
 load_dotenv()
 
 # Database connection
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
+POSTGRES_USER     = os.getenv("POSTGRES_USER")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+POSTGRES_DB       = os.getenv("POSTGRES_DB")
+DB_HOST           = os.getenv("DB_HOST")
+DB_PORT           = os.getenv("DB_PORT")
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 engine = create_engine(DATABASE_URL)
 
 # Assets from your portfolio
@@ -105,6 +106,9 @@ def load_to_bronze(df: pd.DataFrame) -> None:
         return
 
     print(f"Loading {len(df)} rows into bronze.raw_prices...")
+
+    with engine.connect() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS bronze"))
 
     df.to_sql(
         name="raw_prices",

@@ -1,0 +1,13 @@
+portfolio_analytics:
+  target: dev
+  outputs:
+    dev:
+      dbname: portfolio_db
+      host: postgres
+      password: ${POSTGRES_PASSWORD}
+      port: 5432
+      schema: public
+      threads: 1
+      type: postgres
+      user: ${POSTGRES_USER}
+
