@@ -4,10 +4,10 @@ portfolio_analytics:
     dev:
       dbname: portfolio_db
       host: postgres
-      password: ${POSTGRES_PASSWORD}
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
       port: 5432
       schema: public
       threads: 1
       type: postgres
-      user: ${POSTGRES_USER}
+      user: "{{ env_var('POSTGRES_USER') }}"
 

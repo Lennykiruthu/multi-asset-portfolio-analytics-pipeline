@@ -1,9 +1,28 @@
+# Python virtual environment
 analytics-pipeline-venv/
+
+# dbt auto-generated user metadata
+portfolio_analytics/.user.yml
+
+# Superset metadata database (contains secrets, transfer manually via scp)
+superset_home/
+
+# Logs
 **/logs/
+
+# Python cache
 __pycache__/
 *.pyc
+
+# Jupyter
 .ipynb_checkpoints/
-*.env
-*.zip
 *.ipynb
+
+# Environment variables (contains secrets, transfer manually via scp)
+*.env
+
+# Dashboard exports
+*.zip
+
+# VSCode editor settings
 .vscode/

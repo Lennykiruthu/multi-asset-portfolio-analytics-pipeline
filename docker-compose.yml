@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:18
+    restart: unless-stopped
     container_name: portfolio_postgres
     env_file:
       - .env
@@ -26,7 +27,25 @@ services:
         condition: service_healthy            # waits for healthcheck to pass, not just container start
     env_file:
       - .env
-    command: run                             # default dbt command; override per need
+    command: build --profiles-dir /usr/app/dbt  # default dbt command; override per need
+
+  superset:
+    build:
+      context: .
+      dockerfile: Dockerfile.superset
+    container_name: portfolio_superset
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./superset_home:/app/superset_home
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:

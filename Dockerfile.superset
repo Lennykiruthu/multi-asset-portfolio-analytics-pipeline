@@ -1,0 +1,4 @@
+FROM apache/superset:latest
+USER root
+RUN /usr/local/bin/uv pip install --python /app/.venv/bin/python3 psycopg2-binary
+USER superset
