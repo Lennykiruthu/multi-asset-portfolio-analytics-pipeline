@@ -42,11 +42,14 @@ cd multi-asset-portfolio-analytics-pipeline
 ```
    Create a `.env` file at the project root:
 ```
-
+POSTGRES_USER=portfolio_user
+POSTGRES_PASSWORD=your_password_here
+POSTGRES_DB=portfolio_db
+SUPERSET_SECRET_KEY=your_secret_key_here
 ```
    Generate a secure Superset key with:
 ```
-
+openssl rand -base64 42
 ```
 2. Build images
 ```
