@@ -22,7 +22,7 @@ __pycache__/
 *.env
 
 # Dashboard exports
-*.zip
+#*.zip
 
 # VSCode editor settings
 .vscode/
