@@ -109,6 +109,7 @@ def load_to_bronze(df: pd.DataFrame) -> None:
 
     with engine.connect() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS bronze"))
+        conn.commit
 
     df.to_sql(
         name="raw_prices",
