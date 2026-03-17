@@ -1,4 +1,5 @@
 A modern data stack portfolio project built with **PostgreSQL · dbt · Apache Superset**, fully containerised with Docker Compose. Raw asset price data is ingested via Python, transformed into analytical models with dbt, and visualised in a Superset dashboard.
+[orchestration](multi_asset_portfolio_pipeline_architecture.svg)
 
 ---
 ## Stack
