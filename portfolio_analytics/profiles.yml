@@ -6,7 +6,7 @@ portfolio_analytics:
       host: postgres
       password: "{{ env_var('POSTGRES_PASSWORD') }}"
       port: 5432
-      schema: public
+      schema: bronze
       threads: 1
       type: postgres
       user: "{{ env_var('POSTGRES_USER') }}"
