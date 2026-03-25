@@ -5,18 +5,12 @@ from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
 
+from config import DATABASE_URL, BRONZE_SCHEMA
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Database connection
-POSTGRES_USER     = os.getenv("POSTGRES_USER")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-POSTGRES_DB       = os.getenv("POSTGRES_DB")
-DB_HOST           = "localhost"
-DB_PORT           = "5432"
-
-
-DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 engine = create_engine(DATABASE_URL)
 
 # Assets from your portfolio
@@ -114,7 +108,7 @@ def load_to_bronze(df: pd.DataFrame) -> None:
     df.to_sql(
         name="raw_prices",
         con=engine,
-        schema="bronze",
+        schema=BRONZE_SCHEMA,
         if_exists="append",
         index=False
     )
