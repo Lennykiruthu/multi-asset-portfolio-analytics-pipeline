@@ -26,3 +26,6 @@ __pycache__/
 
 # VSCode editor settings
 .vscode/
+
+# Architecture image
+multi_asset_portfolio_pipeline_architecture.png
