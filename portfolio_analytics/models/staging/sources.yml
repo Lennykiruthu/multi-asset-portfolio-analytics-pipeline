@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: portfolio_db
+    schema: bronze
+    tables:
+      - name: raw_prices
+      - name: raw_fred
