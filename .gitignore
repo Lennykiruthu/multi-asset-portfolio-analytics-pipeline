@@ -29,3 +29,6 @@ __pycache__/
 
 # Architecture image
 multi_asset_portfolio_pipeline_architecture.png
+
+# Analysis scratch
+portfolio_analytics/analyses/scratch/
