@@ -51,48 +51,58 @@ pivoted AS (
     GROUP BY date                                                           
 ),
 
-with_derived AS (
+cpi_mom_change AS (
     SELECT
         date,
+        cpi,
+        ROUND(
+            (cpi - LAG(cpi) OVER (
+                ORDER BY date
+            ))::numeric, 4
+        ) AS cpi_mom_change
+    FROM pivoted
+    WHERE cpi IS NOT NULL
+),
+
+with_derived AS (
+    SELECT
+        p.date,
 
         -- Raw series
-        fed_funds_rate,
-        treasury_10y_yield,
-        cpi,
-        unemployment_rate,
-        recession_indicator,
-        breakeven_inflation,
+        p.fed_funds_rate,
+        p.treasury_10y_yield,
+        p.cpi,
+        p.unemployment_rate,
+        p.recession_indicator,
+        p.breakeven_inflation,
 
         -- Derived metrics
         -- Yield curve slope: negative = inversion, historically precedes recession
         ROUND(
-            (treasury_10y_yield - fed_funds_rate)::numeric, 4
+            (p.treasury_10y_yield - p.fed_funds_rate)::numeric, 4
         )                                                                  AS yield_curve_slope,
 
         -- Real fed funds rate: how restrictive monetary policy actually is
         -- after accounting for inflation expectations
         ROUND(
-            (fed_funds_rate - breakeven_inflation)::numeric, 4
+            (p.fed_funds_rate - p.breakeven_inflation)::numeric, 4
         )                                                                   AS real_fed_funds_rate,
 
         -- Real 10Y yield: direct competitor to equity earnings yield
         ROUND(
-            (treasury_10y_yield - breakeven_inflation)::numeric, 4
+            (p.treasury_10y_yield - p.breakeven_inflation)::numeric, 4
         )                                                                    AS real_10y_yield,
 
         -- MoM CPI change: rate of change matters more than the level
-        ROUND(
-            (
-                cpi - LAG(cpi, 1) OVER (ORDER BY date)
-            )::numeric, 4
-        )                                                                     AS cpi_mom_change,
+        c.cpi_mom_change,
 
         -- Boolean convenience flag for joining / filtering
         CASE
-            WHEN recession_indicator = 1 THEN true ElSE false
+            WHEN p.recession_indicator = 1 THEN true ElSE false
         END                                                                    AS is_recession
     
-    FROM pivoted
+    FROM pivoted p
+    LEFT JOIN cpi_mom_change c ON p.date = c.date
 )
 
 SELECT * FROM with_derived
