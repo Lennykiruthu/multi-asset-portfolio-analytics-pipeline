@@ -1,0 +1,148 @@
+version: 2
+
+models:
+  - name: stg_raw_prices
+    description: > 
+      Staged daily asset prices from the bronze table. This model casts the date,
+      rounds the price columns to 4 decimal places, and ensures proper data types.
+    columns:
+      - name: price_date
+        description: "The date of the asset price record."
+        tests:
+          - not_null
+
+      - name: ticker
+        description: "The stock or asset ticker symbol (e.g. AAPL, BTC)."
+        tests:
+          - not_null
+
+      - name: open
+        description: "Opening price of the asset for the day."
+
+      - name: high
+        description: "Highest price of the asset for the day."
+
+      - name: low
+        description: "Lowest price of the asset for the day."
+
+      - name: close
+        description: "Closing price of the asset for the day." 
+
+      - name: volume
+        description: "Total trading volume for the day." 
+
+      - name: ingested_at
+        description: "The timestamp of when this record was ingested into the raw source."                                        
+
+  - name: stg_fred_macro
+    description: >
+      Pivots raw FRED economic data from a long format to a wide format (one row per date).
+      It also calculates key macro-economic indicators like the yield curve slope 
+      and real interest rates.
+    columns:
+      - name: date
+        description: "The primary key for this model; one record per day."
+        tests:
+          - unique
+          - not_null
+
+      - name: fed_funds_rate
+        description: "The daily effective federal funds rate (DFF)."
+
+      - name: treasury_10y_yield
+        description: "10-Year Treasury Constant Maturity Rate (GS10)."
+
+      - name: cpi
+        description: "Consumer Price Index for All Urban Consumers: All Items in U.S. City Average (CPIAUCSL)."
+
+      - name: unemployment_rate
+        description: "Civilian Unemployment Rate (UNRATE)."
+
+      - name: recession_indicator
+        description: "NBER based Recession Indicators (USREC). 1 indicates recession, 0 indicates non-recession."
+
+      - name: breakeven_inflation
+        description: "10-Year Breakeven Inflation Rate (T10YIE). This represents a measure of expected inflation derived from 10-Year Treasury Constant Maturity Securities."
+
+      - name: yield_curve_slope
+        description: "The spread between the 10Y yield and the Fed Funds Rate. A negative value indicates a curve inversion."
+
+      - name: cpi_mom_change
+        description: "Month-over-Month change in the Consumer Price Index. Calculated via LAG function."
+
+      - name: real_fed_funds_rate
+        description: "The Fed Funds Rate adjusted for inflation expectations (Fed Funds Rate - Breakeven Inflation)."
+
+      - name: real_10y_yield
+        description: "The 10-Year Treasury yield adjusted for inflation expectations (Treasury 10Y Yield - Breakeven Inflation)."
+
+      - name: is_recession
+        description: "Boolean version of recession_indicator for easier filtering in downstream models."
+
+  - name: stg_transactions
+    description: >
+      Staged and cleaned transaction ledger sourced from bronze.transactions.
+      Each row represents a single validated BUY or SELL event for one asset.
+      This model enforces types, normalises ticker casing to match bronze.raw_prices,
+      derives transaction_type and abs_quantity for downstream convenience, computes
+      gross transaction_value, and hard-filters out any malformed rows (zero quantity,
+      null price, null date) before they can corrupt position calculations in dim_assets.
+ 
+      This model is materialised as a view — it is lightweight transformation only
+      and does not need to be persisted as a table.
+ 
+    columns:
+      - name: transaction_id
+        description: "Primary key. Auto-incrementing integer from bronze.transactions."
+        tests:
+          - unique
+          - not_null
+ 
+      - name: ticker
+        description: "Uppercased, trimmed ticker symbol. Guaranteed to match the casing used in bronze.raw_prices."
+        tests:
+          - not_null
+ 
+      - name: asset_name
+        description: "Human-readable name of the asset, trimmed of whitespace."
+ 
+      - name: asset_type
+        description: "Asset class category (e.g. Stock, ETF, Crypto, Futures)."
+ 
+      - name: sector
+        description: "Sector or category the asset belongs to (e.g. Technology, Cryptocurrency)."
+ 
+      - name: transaction_type
+        description: "Derived direction label — 'BUY' for positive quantity, 'SELL' for negative quantity."
+        tests:
+          - accepted_values:
+              values: ['BUY', 'SELL']
+ 
+      - name: quantity
+        description: >
+          Signed quantity of units transacted. Positive = BUY, negative = SELL.
+          Supports 8 decimal places for fractional crypto positions.
+        tests:
+          - not_null
+ 
+      - name: abs_quantity
+        description: "Absolute value of quantity. Always positive. Provided for convenience in aggregations."
+ 
+      - name: purchase_price
+        description: "Price per unit at time of transaction, in USD. Always positive."
+ 
+      - name: transaction_value
+        description: >
+          Gross value of the transaction in USD: abs_quantity * purchase_price.
+          Always positive regardless of BUY or SELL direction.
+ 
+      - name: transaction_date
+        description: "The calendar date on which the transaction occurred."
+        tests:
+          - not_null
+ 
+      - name: ingested_at
+        description: "Timestamp (UTC) of when the row was written to bronze by the ledger UI."
+         
+      
+
