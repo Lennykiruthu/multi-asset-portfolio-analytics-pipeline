@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: dim_assets
+    description: >
+      Intermediate silver model that calculates portfolio-level performance metrics. 
+      It joins seed metadata (shares held) with daily market prices to derive initial 
+      investments, current market value, and percentage returns per ticker.
+
+    columns:
+      - name: ticker
+        description: "The stock or asset ticker symbol."
+        tests:
+          - unique
+          - not_null
+
+      - name: asset_name
+        description: "The full name of the asset (e.g., Apple Inc, Bitcoin)."
+
+      - name: asset_type
+        description: "Category of the asset, such as Equity, ETF, or Crypto."
+
+      - name: sector
+        description: "The economic sector the asset belongs to."
+
+      - name: shares_held
+        description: "Total number of units or shares currently in the portfolio."
+
+      - name: purchase_date
+        description: "The date of the first available price in the data, used as the proxy for the purchase date."
+
+      - name: purchase_price
+        description: "The cost basis per share. Prioritizes the seed override price; if null, uses the first available market close."
+
+      - name: initial_investment
+        description: "Total cost of the position (shares_held * purchase_price)."
+
+      - name: latest_date
+        description: "The most recent date available in the daily returns data."
+
+      - name: latest_price
+        description: "The most recent closing price for the asset."
+
+      - name: current_value
+        description: "The current market value of the position (shares_held * latest_price)."
+
+      - name: total_return_dollar
+        description: "The absolute profit or loss in currency units (current_value - initial_investment)."
+
+      - name: total_return_pct
+        description: "The percentage return on the initial investment."
+
+      - name: weight_pct
+        description: "The percentage of the total portfolio this asset represents based on initial investment."
+
+      - name: weight_decimal
+        description: "The portfolio weight expressed as a decimal (0 to 1) for easier calculation in downstream Gold models."      
