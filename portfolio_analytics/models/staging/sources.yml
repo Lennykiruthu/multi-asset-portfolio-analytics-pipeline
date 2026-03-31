@@ -2,8 +2,114 @@ version: 2
 
 sources:
   - name: bronze
+    description: >
+      Raw data layer containing untouched data ingested from external APIs. 
+      Data in this schema is appended incrementally by Python ETL scripts.  
     database: portfolio_db
     schema: bronze
+
     tables:
       - name: raw_prices
+        description: >
+          Daily OHLCV (Open, High, Low, Close, Volume) market data for stocks, 
+          ETFs, and Crypto fetched via the yfinance library.   
+
+        columns:
+          - name: date
+            description: "The trading date for the asset prices."
+            tests:
+              - not_null
+
+          - name: ticker
+            description: "The unique symbol for the asset (e.g., AAPL, BTC-USD)."
+            tests:
+              - not_null
+
+          - name: open
+            description: "The price at which the asset first traded when the exchange opened."
+
+          - name: high
+            description: "The highest price reached during the trading day."
+
+          - name: low
+            description: "The lowest price reached during the trading day."
+
+          - name: close
+            description: "The final price at which the asset traded when the exchange closed."
+
+          - name: volume
+            description: "The total number of shares or units traded during the day."
+
+          - name: ingested_at
+            description: "Timestamp (UTC) indicating when the Python script loaded this row into Postgres."         
+
       - name: raw_fred
+        description: >
+          Economic time-series data from the Federal Reserve Economic Data (FRED) API.
+          Data is stored in a 'long' format where each row represents a single 
+          observation for a specific economic indicator.      
+
+        columns:
+          - name: date
+            description: "The reference date for the economic observation."
+            tests:
+              - not_null
+
+          - name: series_id
+            description: "The original FRED series code (e.g., DFF, GS10, UNRATE)."
+
+          - name: series_alias
+            description: "A human-readable label for the series (e.g., fed_funds_rate)."
+
+          - name: value
+            description: "The numerical value of the observation. May be null if data is missing for that date."
+
+          - name: ingested_at
+            description: "The timestamp (local) when the row was appended to the database."        
+
+      - name: transactions
+        description: >
+          User-maintained ledger of portfolio transactions written via the Streamlit
+          ledger UI. Each row represents a single BUY or SELL event for one asset.
+          Positive quantity = BUY, negative quantity = SELL. This is the source of
+          truth for portfolio positions — it replaces the static dim_assets_seed file.
+
+        columns:
+          - name: transaction_id
+            description: "Auto-incrementing primary key for each transaction row."
+            tests:
+              - unique
+              - not_null
+ 
+          - name: ticker
+            description: "The asset ticker symbol (e.g. AAPL, BTC-USD). Must match symbols in bronze.raw_prices."
+            tests:
+              - not_null
+ 
+          - name: asset_name
+            description: "Human-readable name of the asset (e.g. Apple Inc.)."
+ 
+          - name: asset_type
+            description: "Asset class category (e.g. Stock, ETF, Crypto, Futures)."
+ 
+          - name: sector
+            description: "Sector or category the asset belongs to (e.g. Technology, Cryptocurrency)."
+ 
+          - name: quantity
+            description: >
+              Signed quantity of units transacted. Positive values represent a BUY,
+              negative values represent a SELL. Supports up to 8 decimal places
+              for fractional crypto positions.
+            tests:
+              - not_null
+ 
+          - name: purchase_price
+            description: "The price per unit paid or received at the time of the transaction, in USD."
+ 
+          - name: purchase_date
+            description: "The calendar date on which the transaction occurred."
+            tests:
+              - not_null
+ 
+          - name: ingested_at
+            description: "Timestamp (UTC) of when the row was written to the database by the ledger UI."                        
