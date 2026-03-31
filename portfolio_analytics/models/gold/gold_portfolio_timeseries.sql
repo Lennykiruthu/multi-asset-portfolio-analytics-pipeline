@@ -13,24 +13,24 @@ WITH daily_prices AS (
     WHERE close IS NOT NULL
 ),
 
--- Pull shares_held per ticker from assets
+-- Pull net_shares per ticker from assets
 holdings AS (
     SELECT
         ticker,
-        shares_held
+        net_shares
     FROM {{ ref("dim_assets") }}
 ),
 
--- Daily market value per ticket
+-- Daily market value per ticker
 daily_ticket_value AS (
     SELECT
         d.price_date,
         d.ticker,
         d.close,
-        h.shares_held,
-        ROUND((d.close * h.shares_held)::numeric, 2) AS ticker_market_value
+        h.net_shares,
+        ROUND((d.close * h.net_shares)::numeric, 2) AS ticker_market_value
     FROM daily_prices d
-    INNER JOIN holdings h ON d.ticker = h.ticker  
+    INNER JOIN holdings h ON d.ticker = h.ticker
 ),
 
 -- Generate a date spine (every calendar day)
@@ -48,8 +48,8 @@ ticker_spine AS (
     SELECT
         s.price_date,
         t.ticker
-    FROM date_spine s 
-    CROSS JOIN (SELECT DISTINCT ticker FROM silver.dim_assets) t
+    FROM date_spine s
+    CROSS JOIN (SELECT DISTINCT ticker FROM {{ ref("dim_assets") }}) t
 ),
 
 -- Tag each row with its last known non-null group
@@ -80,7 +80,7 @@ ticker_filled AS (
 
 -- Aggregate to portfolio level per date
 daily_portfolio_value AS (
-    SELECT 
+    SELECT
         price_date,
         ROUND(SUM(ticker_market_value)::numeric, 2) AS portfolio_value
     FROM ticker_filled
@@ -113,7 +113,7 @@ with_returns AS (
     FROM with_lag
 ),
 
--- Running peal and drawdown on blended portfolio series
+-- Running peak and drawdown on blended portfolio series
 with_drawdown AS (
     SELECT
         price_date,
@@ -122,11 +122,11 @@ with_drawdown AS (
 
         MAX(portfolio_value) OVER (
             ORDER BY price_date
-            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW 
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS running_peak,
 
         ROUND(
-            (portfolio_value - MAX(portfolio_value) OVER(
+            (portfolio_value - MAX(portfolio_value) OVER (
                 ORDER BY price_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             )) / NULLIF(MAX(portfolio_value) OVER (
