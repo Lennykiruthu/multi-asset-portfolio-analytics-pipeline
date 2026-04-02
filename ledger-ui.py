@@ -201,13 +201,13 @@ def insert_transaction(
         return False
 
 
-def delete_transaction(transaction_id: int) -> bool:
+def delete_transaction(transaction_id: str) -> bool:
     """Hard-delete a single transaction by ID (corrections only)."""
     try:
         with engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM bronze.transactions WHERE transaction_id = :id"),
-                {"id": transaction_id}
+                {"id": str(transaction_id)} # Ensure it is sent as a string
             )
         return True
     except Exception as e:
@@ -398,27 +398,64 @@ else:
 
     st.dataframe(display_df.drop(columns=["transaction_id"]), use_container_width=True, hide_index=True)
 
-    # ── Delete / correction tool ───────────────────────────────────────────
-    with st.expander("🗑️ Delete a transaction (corrections only)"):
-        st.warning(
-            "This permanently removes the row from `bronze.transactions`. "
-            "Use only to fix data entry mistakes."
-        )
+# --- State Management (Place this at the top of your app script) ---
+if 'delete_confirm' not in st.session_state:
+    st.session_state.delete_confirm = False
+if 'row_to_delete' not in st.session_state:
+    st.session_state.row_to_delete = None
 
-        del_id = st.number_input("Transaction ID to delete", min_value=1, step=1, format="%d")
+# ── Delete / correction tool ───────────────────────────────────────────
+with st.expander("🗑️ Delete a transaction (corrections only)"):
+    st.warning(
+        "This permanently removes the row from `bronze.transactions`. "
+        "Use only to fix data entry mistakes."
+    )
 
-        if st.button("Delete", type="secondary"):
+    # 1. Input Field
+    del_id = st.text_input("Transaction ID to delete", key="del_id_input")
+
+    # 2. Search Button
+    if st.button("Search for Transaction", type="secondary"):
+        if not del_id:
+            st.warning("Please enter an ID.")
+        else:
             with engine.connect() as conn:
+                # We cast to str() here to ensure the placeholder :id is treated as a string
                 row = conn.execute(
                     text("SELECT * FROM bronze.transactions WHERE transaction_id = :id"),
-                    {"id": del_id}
+                    {"id": str(del_id)} 
                 ).fetchone()
 
             if row is None:
                 st.error(f"No transaction with ID {del_id} found.")
+                st.session_state.delete_confirm = False
             else:
-                st.write("Row to be deleted:", dict(row._mapping))
-                if st.button("Confirm delete", type="primary"):
-                    if delete_transaction(del_id):
-                        st.success(f"Transaction {del_id} deleted.")
-                        st.rerun()
+                # Store row in state so it persists during the next rerun
+                st.session_state.row_to_delete = dict(row._mapping)
+                st.session_state.delete_confirm = True
+
+    # 3. Confirmation UI (Only shows if a row was found)
+    if st.session_state.delete_confirm:
+        st.divider()
+        st.write("### Review Row for Deletion")
+        st.json(st.session_state.row_to_delete)
+        
+        st.error("Are you absolutely sure? This cannot be undone.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔥 Confirm Permanent Delete", type="primary"):
+                # Use the ID stored from our search
+                target_id = st.session_state.row_to_delete['transaction_id']
+                if delete_transaction(str(target_id)):
+                    st.success(f"Transaction {target_id} deleted.")
+                    # Reset state and refresh
+                    st.session_state.delete_confirm = False
+                    st.session_state.row_to_delete = None
+                    st.rerun()
+        
+        with col2:
+            if st.button("Cancel"):
+                st.session_state.delete_confirm = False
+                st.session_state.row_to_delete = None
+                st.rerun()
