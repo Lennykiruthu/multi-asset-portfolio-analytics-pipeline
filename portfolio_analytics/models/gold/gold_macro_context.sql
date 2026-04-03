@@ -8,77 +8,64 @@
 /*
     gold_macro_context
     ------------------
-    Enriches the portfolio time-series with macro regime context.
+    Enriches the real portfolio time-series with macro regime context.
     Grain: one row per date (portfolio-level, not per-ticker).
 
-    This is the model that powers the macro-overlay layer on the
-    existing Superset time-series charts. For every date there is
-    portfolio value and drawdown — this model adds:
-        - Current macro regime label       (for background shading)
-        - Yield curve slope                (for dual-axis overlay)
-        - Recession flag                   (for shaded recession bands)
-        - Fed stance + cycle phase         (for filter panel)
-        - Real fed funds rate              (for rate environment context)
-        - Regime signal strength           (for annotation intensity)
+    Sources:
+        - gold_portfolio_timeseries  → the actual portfolio: real position
+          sizes, real entry/exit dates, forward-filled market values from
+          int_daily_holdings. This is the single source of truth for
+          portfolio value and drawdown.
+        - fct_macro_regimes          → regime classification per calendar date.
 
-    Design note:
-        This model does NOT replace gold_portfolio_timeseries.
-        It sits alongside it and is joined in Superset on date.
-        Keeping them separate means the existing dashboard charts
-        are untouched — the macro context is an additive layer.
+    Previously this model sourced from fct_macro_asset_performance, which
+    built a naïve equal-weighted average across all tickers in fct_daily_returns
+    regardless of whether those positions were actually held. That produced a
+    synthetic portfolio disconnected from real transaction history.
 
-    Fix note:
-        days_in_regime uses the "islands" trick — date minus a global
-        row_number produces the same anchor date for all consecutive rows
-        in the same regime. PostgreSQL does not allow window functions
-        nested inside PARTITION BY, so rn is pre-computed in the joined
-        CTE as a plain column, then consumed in the final CTE.
+    Design:
+        gold_portfolio_timeseries is already at portfolio-day grain with
+        portfolio_value, portfolio_daily_return, running_peak, and
+        portfolio_drawdown pre-computed. No aggregation is needed here —
+        this model is a pure enrichment join.
 
-    Superset usage:
-        - Use macro_regime as a dashboard filter dimension
-        - Use is_recession to drive background color in time-series charts
-        - Use yield_curve_slope as a second Y-axis on portfolio value chart
-        - Use regime_changed to annotate regime transition points
+        days_in_regime uses the islands trick: (date - global_rn days)
+        produces the same anchor date for all consecutive rows sharing the
+        same regime. When the regime changes, rn keeps incrementing but
+        the anchor shifts, opening a new island. PostgreSQL does not allow
+        window functions nested inside PARTITION BY, so rn is pre-computed
+        as a plain column in the joined CTE and consumed in the final CTE.
 */
 
-with
+WITH portfolio AS (
 
-portfolio_timeseries as (
-
-    select
-        date,
-        round(sum(close)::numeric,              2)      as portfolio_value,
-        round(avg(daily_return)::numeric,        6)      as portfolio_daily_return,
-        round(avg(cumulative_return)::numeric,   6)      as portfolio_cumulative_return,
-        round(avg(drawdown)::numeric,            6)      as portfolio_drawdown,
-        round(min(drawdown)::numeric,            6)      as worst_asset_drawdown
-
-    from {{ ref('fct_macro_asset_performance') }}
-    group by date
+    SELECT
+        price_date                  AS date,
+        portfolio_value,
+        portfolio_daily_return,
+        running_peak,
+        portfolio_drawdown
+    FROM {{ ref('gold_portfolio_timeseries') }}
 
 ),
 
-macro as (
+macro AS (
 
-    select * from {{ ref('fct_macro_regimes') }}
+    SELECT * FROM {{ ref('fct_macro_regimes') }}
 
 ),
 
--- Pre-compute a global row number and all window expressions that are
--- safe to compute at this stage. days_in_regime cannot live here because
--- its PARTITION BY depends on rn — so rn is carried forward as a plain
--- column for the final CTE to consume.
-joined as (
+joined AS (
 
-    select
+    SELECT
+        -- ── Date ─────────────────────────────────────────────────────────────
         p.date,
 
-        -- ── Portfolio performance ─────────────────────────────────────────────
+        -- ── Real portfolio performance ────────────────────────────────────────
         p.portfolio_value,
         p.portfolio_daily_return,
-        p.portfolio_cumulative_return,
+        p.running_peak,
         p.portfolio_drawdown,
-        p.worst_asset_drawdown,
 
         -- ── Macro regime dimensions ───────────────────────────────────────────
         m.macro_regime,
@@ -100,48 +87,35 @@ joined as (
         m.inversion_depth,
         m.dff_3m_change,
 
-        -- ── Regime transition columns ─────────────────────────────────────────
-        case
-            when m.macro_regime != lag(m.macro_regime) over (order by p.date)
-            then true
-            else false
-        end                                                     as regime_changed,
+        -- ── Regime transition flags ───────────────────────────────────────────
+        CASE
+            WHEN m.macro_regime != LAG(m.macro_regime) OVER (ORDER BY p.date)
+            THEN true
+            ELSE false
+        END                                                     AS regime_changed,
 
-        lag(m.macro_regime) over (
-            order by p.date
-        )                                                       as previous_regime,
+        LAG(m.macro_regime) OVER (
+            ORDER BY p.date
+        )                                                       AS previous_regime,
 
-        -- ── Running portfolio peak ────────────────────────────────────────────
-        max(p.portfolio_value) over (
-            order by p.date
-            rows between unbounded preceding and current row
-        )                                                       as portfolio_running_peak,
+        -- ── Global row number — consumed by final CTE for islands trick ───────
+        ROW_NUMBER() OVER (ORDER BY p.date)                     AS rn
 
-        -- ── Global row number — plain column, consumed by final CTE ──────────
-        -- Must be computed here so final CTE can use it in PARTITION BY
-        -- without nesting a window function inside another window function.
-        row_number() over (order by p.date)                     as rn
-
-    from portfolio_timeseries p
-    left join macro           m on p.date = m.date
-    where m.date is not null
+    FROM portfolio p
+    INNER JOIN macro m ON p.date = m.date
+    -- INNER JOIN because a portfolio date with no macro reading is not
+    -- useful for regime analysis. These are rare FRED gaps on trading days.
 
 ),
 
--- days_in_regime lives in its own CTE because its PARTITION BY references
--- rn, which is only a plain column after the joined CTE resolves.
--- The islands trick: (date - rn days) produces the same anchor date for
--- all consecutive rows in the same regime. When the regime changes, rn
--- keeps incrementing but the anchor shifts, starting a new island.
-final as (
+final AS (
 
-    select
+    SELECT
         date,
         portfolio_value,
         portfolio_daily_return,
-        portfolio_cumulative_return,
+        running_peak,
         portfolio_drawdown,
-        worst_asset_drawdown,
         macro_regime,
         fed_stance,
         cycle_phase,
@@ -160,19 +134,20 @@ final as (
         dff_3m_change,
         regime_changed,
         previous_regime,
-        portfolio_running_peak,
 
         -- ── Consecutive days in current regime (islands trick) ────────────────
-        row_number() over (
-            partition by
+        -- (date - rn days) is constant for all consecutive rows in the same
+        -- regime. A regime change shifts the anchor, restarting the count.
+        ROW_NUMBER() OVER (
+            PARTITION BY
                 macro_regime,
                 (date::date - (rn || ' days')::interval)::date
-            order by date
-        )                                                       as days_in_regime
+            ORDER BY date
+        )                                                       AS days_in_regime
 
-    from joined
+    FROM joined
 
 )
 
-select * from final
-order by date
+SELECT * FROM final
+ORDER BY date
