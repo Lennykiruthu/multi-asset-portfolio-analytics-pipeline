@@ -13,24 +13,32 @@ WITH daily_prices AS (
     WHERE close IS NOT NULL
 ),
 
--- Pull net_shares per ticker from assets
+-- Pull time-aware share counts per (ticker, date)
+-- Previously this joined dim_assets which gave a single current net_shares.
+-- Now it joins int_daily_holdings which gives the correct shares held on
+-- each historical date, so fully-exited tickers contribute their real
+-- market value over the period they were held.
 holdings AS (
     SELECT
+        price_date,
         ticker,
-        net_shares
-    FROM {{ ref("dim_assets") }}
+        shares_held
+    FROM {{ ref("int_daily_holdings") }}
+    WHERE shares_held > 0  -- exclude pre-buy and post-full-exit dates
 ),
 
--- Daily market value per ticker
+-- Daily market value per ticker — now a date-scoped join
 daily_ticket_value AS (
     SELECT
         d.price_date,
         d.ticker,
         d.close,
-        h.net_shares,
-        ROUND((d.close * h.net_shares)::numeric, 2) AS ticker_market_value
+        h.shares_held                                        AS net_shares,
+        ROUND((d.close * h.shares_held)::numeric, 2)        AS ticker_market_value
     FROM daily_prices d
-    INNER JOIN holdings h ON d.ticker = h.ticker
+    INNER JOIN holdings h
+        ON  d.ticker     = h.ticker
+        AND d.price_date = h.price_date   -- <-- date-scoped, was a ticker-only join
 ),
 
 -- Generate a date spine (every calendar day)
@@ -49,7 +57,7 @@ ticker_spine AS (
         s.price_date,
         t.ticker
     FROM date_spine s
-    CROSS JOIN (SELECT DISTINCT ticker FROM {{ ref("dim_assets") }}) t
+    CROSS JOIN (SELECT DISTINCT ticker FROM {{ ref("int_daily_holdings") }}) t
 ),
 
 -- Tag each row with its last known non-null group
