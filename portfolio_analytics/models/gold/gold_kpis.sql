@@ -5,7 +5,7 @@
 }}
 
 WITH summary AS (
-    SELECT * FROM {{ ref("gold_portfolio_summary") }}
+    SELECT * FROM {{ ref("dim_assets") }}
 ),
 
 timeseries AS (
