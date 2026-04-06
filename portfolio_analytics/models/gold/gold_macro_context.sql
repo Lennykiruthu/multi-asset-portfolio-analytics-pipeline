@@ -8,43 +8,35 @@
 /*
     gold_macro_context
     ------------------
-    Enriches the real portfolio time-series with macro regime context.
-    Grain: one row per date (portfolio-level, not per-ticker).
+    Grain: one row per (date, ticker).
 
-    Sources:
-        - gold_portfolio_timeseries  → the actual portfolio: real position
-          sizes, real entry/exit dates, forward-filled market values from
-          int_daily_holdings. This is the single source of truth for
-          portfolio value and drawdown.
-        - fct_macro_regimes          → regime classification per calendar date.
+    Previously grain was (date) only — portfolio had already been aggregated
+    in gold_portfolio_timeseries before this model joined macro data onto it.
 
-    Previously this model sourced from fct_macro_asset_performance, which
-    built a naïve equal-weighted average across all tickers in fct_daily_returns
-    regardless of whether those positions were actually held. That produced a
-    synthetic portfolio disconnected from real transaction history.
+    Now gold_portfolio_timeseries exposes (price_date, ticker) grain, so
+    this model inherits that grain and replicates macro columns across every
+    ticker for each date. This lets Superset cross-filter by ticker, macro
+    regime, fed_stance, cycle_phase etc. simultaneously.
 
-    Design:
-        gold_portfolio_timeseries is already at portfolio-day grain with
-        portfolio_value, portfolio_daily_return, running_peak, and
-        portfolio_drawdown pre-computed. No aggregation is needed here —
-        this model is a pure enrichment join.
+    Portfolio-level aggregation (SUM of ticker_market_value, blended return,
+    blended drawdown) is left to Superset metrics / chart-level aggregation.
 
-        days_in_regime uses the islands trick: (date - global_rn days)
-        produces the same anchor date for all consecutive rows sharing the
-        same regime. When the regime changes, rn keeps incrementing but
-        the anchor shifts, opening a new island. PostgreSQL does not allow
-        window functions nested inside PARTITION BY, so rn is pre-computed
-        as a plain column in the joined CTE and consumed in the final CTE.
+    The islands trick for days_in_regime is unchanged — it still operates on
+    the date dimension, not the ticker dimension, so regime streak counting
+    is correct.
 */
 
 WITH portfolio AS (
 
     SELECT
         price_date                  AS date,
-        portfolio_value,
-        portfolio_daily_return,
-        running_peak,
-        portfolio_drawdown
+        ticker,
+        close,
+        net_shares,
+        ticker_market_value,
+        ticker_daily_return,
+        ticker_running_peak,
+        ticker_drawdown
     FROM {{ ref('gold_portfolio_timeseries') }}
 
 ),
@@ -58,14 +50,17 @@ macro AS (
 joined AS (
 
     SELECT
-        -- ── Date ─────────────────────────────────────────────────────────────
+        -- ── Dimensions ────────────────────────────────────────────────────────
         p.date,
+        p.ticker,
 
-        -- ── Real portfolio performance ────────────────────────────────────────
-        p.portfolio_value,
-        p.portfolio_daily_return,
-        p.running_peak,
-        p.portfolio_drawdown,
+        -- ── Ticker-level performance ──────────────────────────────────────────
+        p.close,
+        p.net_shares,
+        p.ticker_market_value,
+        p.ticker_daily_return,
+        p.ticker_running_peak,
+        p.ticker_drawdown,
 
         -- ── Macro regime dimensions ───────────────────────────────────────────
         m.macro_regime,
@@ -88,23 +83,28 @@ joined AS (
         m.dff_3m_change,
 
         -- ── Regime transition flags ───────────────────────────────────────────
+        -- Partition by ticker so each ticker's regime-change flag is independent
+        -- of other tickers on the same date (macro is the same, but the flag
+        -- compares against the previous row in this ticker's own sequence).
         CASE
-            WHEN m.macro_regime != LAG(m.macro_regime) OVER (ORDER BY p.date)
+            WHEN m.macro_regime != LAG(m.macro_regime) OVER (
+                PARTITION BY p.ticker ORDER BY p.date
+            )
             THEN true
             ELSE false
         END                                                     AS regime_changed,
 
         LAG(m.macro_regime) OVER (
-            ORDER BY p.date
+            PARTITION BY p.ticker ORDER BY p.date
         )                                                       AS previous_regime,
 
-        -- ── Global row number — consumed by final CTE for islands trick ───────
-        ROW_NUMBER() OVER (ORDER BY p.date)                     AS rn
+        -- ── Global row number per ticker — used by islands trick below ─────────
+        ROW_NUMBER() OVER (
+            PARTITION BY p.ticker ORDER BY p.date
+        )                                                       AS rn
 
     FROM portfolio p
     INNER JOIN macro m ON p.date = m.date
-    -- INNER JOIN because a portfolio date with no macro reading is not
-    -- useful for regime analysis. These are rare FRED gaps on trading days.
 
 ),
 
@@ -112,10 +112,13 @@ final AS (
 
     SELECT
         date,
-        portfolio_value,
-        portfolio_daily_return,
-        running_peak,
-        portfolio_drawdown,
+        ticker,
+        close,
+        net_shares,
+        ticker_market_value,
+        ticker_daily_return,
+        ticker_running_peak,
+        ticker_drawdown,
         macro_regime,
         fed_stance,
         cycle_phase,
@@ -135,11 +138,12 @@ final AS (
         regime_changed,
         previous_regime,
 
-        -- ── Consecutive days in current regime (islands trick) ────────────────
-        -- (date - rn days) is constant for all consecutive rows in the same
-        -- regime. A regime change shifts the anchor, restarting the count.
+        -- ── Consecutive days in current regime per ticker (islands trick) ─────
+        -- Partitioned by (ticker, macro_regime, anchor) so the streak resets
+        -- independently per ticker when the regime changes.
         ROW_NUMBER() OVER (
             PARTITION BY
+                ticker,
                 macro_regime,
                 (date::date - (rn || ' days')::interval)::date
             ORDER BY date
@@ -150,4 +154,4 @@ final AS (
 )
 
 SELECT * FROM final
-ORDER BY date
+ORDER BY date, ticker
