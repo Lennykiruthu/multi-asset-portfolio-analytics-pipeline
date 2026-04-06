@@ -4,6 +4,26 @@
     )
 }}
 
+/*
+    gold_portfolio_timeseries
+    -------------------------
+    Grain: one row per (price_date, ticker).
+
+    Previously this model aggregated to portfolio level (one row per date)
+    by summing ticker_market_value across all tickers. That aggregation has
+    been removed so that BI tools (Apache Superset) can cross-filter by
+    ticker dimension at query time.
+
+    Portfolio-level metrics (portfolio_value, portfolio_daily_return,
+    running_peak, portfolio_drawdown) are no longer computed here.
+    Superset charts that need portfolio totals should SUM(ticker_market_value)
+    and apply window functions at query/viz time, or via a Superset metric.
+
+    Downstream:
+        - gold_macro_context  joins on (price_date, ticker)
+        - gold_kpis           aggregates this model back to scalar KPIs
+*/
+
 WITH daily_prices AS (
     SELECT
         price_date,
@@ -13,45 +33,39 @@ WITH daily_prices AS (
     WHERE close IS NOT NULL
 ),
 
--- Pull time-aware share counts per (ticker, date)
--- Previously this joined dim_assets which gave a single current net_shares.
--- Now it joins int_daily_holdings which gives the correct shares held on
--- each historical date, so fully-exited tickers contribute their real
--- market value over the period they were held.
 holdings AS (
     SELECT
         price_date,
         ticker,
         shares_held
     FROM {{ ref("int_daily_holdings") }}
-    WHERE shares_held > 0  -- exclude pre-buy and post-full-exit dates
+    WHERE shares_held > 0
 ),
 
--- Daily market value per ticker — now a date-scoped join
-daily_ticket_value AS (
+-- Daily market value per (ticker, date) — date-scoped join
+daily_ticker_value AS (
     SELECT
         d.price_date,
         d.ticker,
         d.close,
-        h.shares_held                                        AS net_shares,
-        ROUND((d.close * h.shares_held)::numeric, 2)        AS ticker_market_value
+        h.shares_held                                       AS net_shares,
+        ROUND((d.close * h.shares_held)::numeric, 2)       AS ticker_market_value
     FROM daily_prices d
     INNER JOIN holdings h
         ON  d.ticker     = h.ticker
-        AND d.price_date = h.price_date   -- <-- date-scoped, was a ticker-only join
+        AND d.price_date = h.price_date
 ),
 
--- Generate a date spine (every calendar day)
+-- Date spine per ticker to forward-fill across weekends / holidays
 date_spine AS (
     SELECT generate_series(
         MIN(price_date),
         MAX(price_date),
         INTERVAL '1 day'
     )::date AS price_date
-    FROM daily_ticket_value
+    FROM daily_ticker_value
 ),
 
--- Cross join spine with all tickers so every ticker has every date
 ticker_spine AS (
     SELECT
         s.price_date,
@@ -60,98 +74,105 @@ ticker_spine AS (
     CROSS JOIN (SELECT DISTINCT ticker FROM {{ ref("int_daily_holdings") }}) t
 ),
 
--- Tag each row with its last known non-null group
+-- Tag each row with its last known non-null fill group
 ticker_filled_groups AS (
     SELECT
         ts.price_date,
         ts.ticker,
+        dtv.close,
+        dtv.net_shares,
         dtv.ticker_market_value,
         COUNT(dtv.ticker_market_value) OVER (
             PARTITION BY ts.ticker ORDER BY ts.price_date
         ) AS fill_group
     FROM ticker_spine ts
-    LEFT JOIN daily_ticket_value dtv
-        ON ts.price_date = dtv.price_date
-        AND ts.ticker = dtv.ticker
+    LEFT JOIN daily_ticker_value dtv
+        ON  ts.price_date = dtv.price_date
+        AND ts.ticker     = dtv.ticker
 ),
 
--- Fill using the group
+-- Forward-fill close, net_shares, and ticker_market_value within each group
 ticker_filled AS (
     SELECT
         price_date,
         ticker,
-        MAX(ticker_market_value) OVER (
-            PARTITION BY ticker, fill_group
-        ) AS ticker_market_value
+        MAX(close)                OVER (PARTITION BY ticker, fill_group) AS close,
+        MAX(net_shares)           OVER (PARTITION BY ticker, fill_group) AS net_shares,
+        MAX(ticker_market_value)  OVER (PARTITION BY ticker, fill_group) AS ticker_market_value
     FROM ticker_filled_groups
 ),
 
--- Aggregate to portfolio level per date
-daily_portfolio_value AS (
+-- Ticker-level daily return (day-over-day change in market value for this ticker)
+with_ticker_return AS (
     SELECT
         price_date,
-        ROUND(SUM(ticker_market_value)::numeric, 2) AS portfolio_value
-    FROM ticker_filled
-    GROUP BY price_date
-),
-
--- Lagged portfolio value to compute daily return
-with_lag AS (
-    SELECT
-        price_date,
-        portfolio_value,
-        LAG(portfolio_value) OVER (ORDER BY price_date) AS prev_portfolio_value
-    FROM daily_portfolio_value
-),
-
--- Daily return on blended portfolio
-with_returns AS (
-    SELECT
-        price_date,
-        portfolio_value,
-        prev_portfolio_value,
+        ticker,
+        close,
+        net_shares,
+        ticker_market_value,
+        LAG(ticker_market_value) OVER (
+            PARTITION BY ticker ORDER BY price_date
+        ) AS prev_ticker_market_value,
 
         CASE
-            WHEN prev_portfolio_value IS NOT NULL AND prev_portfolio_value != 0
+            WHEN LAG(ticker_market_value) OVER (
+                     PARTITION BY ticker ORDER BY price_date
+                 ) IS NOT NULL
+             AND LAG(ticker_market_value) OVER (
+                     PARTITION BY ticker ORDER BY price_date
+                 ) != 0
             THEN ROUND(
-                (portfolio_value - prev_portfolio_value) / prev_portfolio_value,
+                (ticker_market_value - LAG(ticker_market_value) OVER (
+                    PARTITION BY ticker ORDER BY price_date
+                )) / LAG(ticker_market_value) OVER (
+                    PARTITION BY ticker ORDER BY price_date
+                ),
                 6
             )
-        END AS portfolio_daily_return
-    FROM with_lag
+        END AS ticker_daily_return
+    FROM ticker_filled
 ),
 
--- Running peak and drawdown on blended portfolio series
-with_drawdown AS (
+-- Ticker-level running peak and drawdown
+with_ticker_drawdown AS (
     SELECT
         price_date,
-        portfolio_value,
-        portfolio_daily_return,
+        ticker,
+        close,
+        net_shares,
+        ticker_market_value,
+        ticker_daily_return,
 
-        MAX(portfolio_value) OVER (
+        MAX(ticker_market_value) OVER (
+            PARTITION BY ticker
             ORDER BY price_date
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-        ) AS running_peak,
+        ) AS ticker_running_peak,
 
         ROUND(
-            (portfolio_value - MAX(portfolio_value) OVER (
+            (ticker_market_value - MAX(ticker_market_value) OVER (
+                PARTITION BY ticker
                 ORDER BY price_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            )) / NULLIF(MAX(portfolio_value) OVER (
+            )) / NULLIF(MAX(ticker_market_value) OVER (
+                PARTITION BY ticker
                 ORDER BY price_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ), 0),
             6
-        ) AS portfolio_drawdown
+        ) AS ticker_drawdown
 
-    FROM with_returns
+    FROM with_ticker_return
 )
 
 SELECT
     price_date,
-    portfolio_value,
-    portfolio_daily_return,
-    running_peak,
-    portfolio_drawdown
-FROM with_drawdown
-ORDER BY price_date
+    ticker,
+    close,
+    net_shares,
+    ticker_market_value,
+    ticker_daily_return,
+    ticker_running_peak,
+    ticker_drawdown
+FROM with_ticker_drawdown
+ORDER BY price_date, ticker
