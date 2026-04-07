@@ -50,7 +50,9 @@ assets AS (
         ticker,
         asset_name,
         asset_type,
-        total_cost_basis
+        total_cost_basis,
+        total_sale_proceeds,
+        weight_decimal
     FROM {{ ref('dim_assets') }}
 ),
 
@@ -111,12 +113,12 @@ SELECT
     -- ── Value & return ─────────────────────────────────────────────────────
     lv.total_portfolio_value,
     a.total_cost_basis,
-    ROUND((lv.total_portfolio_value - a.total_cost_basis)::numeric, 2)                                         AS total_return_dollar,
-    ROUND((lv.total_portfolio_value - a.total_cost_basis) / NULLIF(a.total_cost_basis, 0)::numeric, 4)         AS total_return_pct,
+    ROUND((lv.total_portfolio_value - a.total_cost_basis + a.total_sale_proceeds)::numeric, 2)                                         AS total_return_dollar,
+    ROUND((lv.total_portfolio_value - a.total_cost_basis + a.total_sale_proceeds) / NULLIF(a.total_cost_basis, 0)::numeric, 4)         AS total_return_pct,
 
     -- ── Risk metrics ───────────────────────────────────────────────────────
-    ts.sharpe_ratio,
-    td.max_drawdown
+    (ts.sharpe_ratio * weight_decimal) AS weighted_sharpe,
+    (td.max_drawdown * weight_decimal) AS weighted_max_dd
 
 FROM assets a
 LEFT JOIN latest_value      lv ON a.ticker = lv.ticker
