@@ -77,8 +77,7 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
             ticker,
             start=start_str,
             auto_adjust=True,
-            progress=False,
-            group_by="ticker",   # consistent shape even for a single ticker
+            progress=False
         )
     except Exception as e:
         return False, f"yfinance download failed for '{ticker}': {e}"
@@ -86,17 +85,13 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
     if data.empty:
         return False, f"yfinance returned no OHLCV data for '{ticker}' from {start_str}."
 
-    # Flatten MultiIndex columns produced by group_by="ticker"
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = [col[0].lower() for col in data.columns]
-    else:
-        data.columns = [col.lower() for col in data.columns]
-
     data = data.reset_index()
+    data.columns = [col.lower() for col in data.columns]
     data.rename(columns={"Date": "date", "index": "date"}, inplace=True)
     data["date"] = pd.to_datetime(data["date"])
     data["ticker"] = ticker
     data["ingested_at"] = datetime.utcnow()
+
 
     # Keep only the columns bronze.raw_prices expects
     data = data[["date", "ticker", "open", "high", "low", "close", "volume", "ingested_at"]]
