@@ -396,7 +396,7 @@ else:
     display_df["quantity"]       = display_df["quantity"].apply(lambda x: f"{x:,.8g}")
     display_df["ingested_at"]    = pd.to_datetime(display_df["ingested_at"]).dt.strftime("%Y-%m-%d %H:%M UTC")
 
-    st.dataframe(display_df.drop(columns=["transaction_id"]), use_container_width=True, hide_index=True)
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # --- State Management (Place this at the top of your app script) ---
 if 'delete_confirm' not in st.session_state:
