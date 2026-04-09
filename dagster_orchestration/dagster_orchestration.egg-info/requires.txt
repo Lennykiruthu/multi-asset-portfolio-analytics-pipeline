@@ -1,0 +1,12 @@
+dagster
+dagster-dbt
+dagster-postgres
+dagster-webserver
+dbt-core
+dbt-postgres
+yfinance
+pandas
+requests
+sqlalchemy
+psycopg2-binary
+python-dotenv

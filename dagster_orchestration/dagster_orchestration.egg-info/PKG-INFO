@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: dagster_orchestration
+Version: 0.1.0
+Requires-Dist: dagster
+Requires-Dist: dagster-dbt
+Requires-Dist: dagster-postgres
+Requires-Dist: dagster-webserver
+Requires-Dist: dbt-core
+Requires-Dist: dbt-postgres
+Requires-Dist: yfinance
+Requires-Dist: pandas
+Requires-Dist: requests
+Requires-Dist: sqlalchemy
+Requires-Dist: psycopg2-binary
+Requires-Dist: python-dotenv
+Dynamic: requires-dist
