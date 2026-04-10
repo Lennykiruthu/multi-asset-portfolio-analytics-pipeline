@@ -3,55 +3,85 @@ version: 2
 models:
   - name: dim_assets
     description: >
-      Intermediate silver model that calculates portfolio-level performance metrics. 
-      It joins seed metadata (shares held) with daily market prices to derive initial 
-      investments, current market value, and percentage returns per ticker.
+      One row per ticker representing the current state of each position in the
+      portfolio. Fully transaction-driven, sourced from stg_transactions. Net shares
+      are calculated as the sum of all buy (positive) and sell (negative) quantities.
+      Tickers with a net zero position (fully exited) are retained so that realised
+      P&L remains visible in downstream gold models.
 
     columns:
       - name: ticker
-        description: "The stock or asset ticker symbol."
-        tests:
-          - unique
-          - not_null
+        description: Unique identifier for the asset (e.g. AAPL, BTC-USD).
 
       - name: asset_name
-        description: "The full name of the asset (e.g., Apple Inc, Bitcoin)."
+        description: Human-readable name of the asset.
 
       - name: asset_type
-        description: "Category of the asset, such as Equity, ETF, or Crypto."
+        description: Classification of the asset (e.g. Stock, ETF, Crypto).
 
       - name: sector
-        description: "The economic sector the asset belongs to."
+        description: Sector the asset belongs to (e.g. Technology, Financials).
 
-      - name: shares_held
-        description: "Total number of units or shares currently in the portfolio."
+      - name: net_shares
+        description: >
+          Live position size. Calculated as SUM(quantity) across all transactions
+          for the ticker, where BUY rows carry positive quantity and SELL rows
+          carry negative quantity. A value of 0 indicates a fully exited position.
 
-      - name: purchase_date
-        description: "The date of the first available price in the data, used as the proxy for the purchase date."
+      - name: first_transaction_date
+        description: Date of the earliest BUY transaction for this ticker. Used as the position open date.
 
-      - name: purchase_price
-        description: "The cost basis per share. Prioritizes the seed override price; if null, uses the first available market close."
+      - name: avg_cost_basis
+        description: >
+          Weighted average purchase price across all BUY transactions.
+          Calculated as SUM(abs_quantity × purchase_price) / SUM(abs_quantity)
+          for BUY rows only. SELL transactions are excluded.
 
-      - name: initial_investment
-        description: "Total cost of the position (shares_held * purchase_price)."
+      - name: total_cost_basis
+        description: Total capital deployed into this ticker across all BUY transactions.
+
+      - name: total_sale_proceeds
+        description: Total proceeds received from all SELL transactions for this ticker.
+
+      - name: net_invested
+        description: >
+          Net capital still at risk, calculated as total_cost_basis minus
+          total_sale_proceeds. Represents the portion of the original investment
+          not yet recovered through sales.
 
       - name: latest_date
-        description: "The most recent date available in the daily returns data."
+        description: Date of the most recent available market price for this ticker.
 
       - name: latest_price
-        description: "The most recent closing price for the asset."
+        description: Most recent closing price for this ticker, sourced from fct_daily_returns.
 
       - name: current_value
-        description: "The current market value of the position (shares_held * latest_price)."
+        description: Current market value of the open position (net_shares × latest_price).
+
+      - name: unrealised_pnl
+        description: Unrealised profit or loss, calculated as current_value minus net_invested.
+
+      - name: unrealised_return_pct
+        description: Unrealised return as a percentage of net_invested.
 
       - name: total_return_dollar
-        description: "The absolute profit or loss in currency units (current_value - initial_investment)."
+        description: >
+          Total return in dollars including proceeds already banked from sells.
+          Calculated as current_value + total_sale_proceeds − total_cost_basis.
 
       - name: total_return_pct
-        description: "The percentage return on the initial investment."
+        description: Total return as a percentage of total capital ever deployed (total_cost_basis).
 
       - name: weight_pct
-        description: "The percentage of the total portfolio this asset represents based on initial investment."
+        description: >
+          Portfolio weight as a percentage, based on current_value relative to the
+          total portfolio current value. Updates daily as prices move.
 
       - name: weight_decimal
-        description: "The portfolio weight expressed as a decimal (0 to 1) for easier calculation in downstream Gold models."      
+        description: Portfolio weight expressed as a decimal (weight_pct / 100).
+
+      - name: buy_count
+        description: Total number of BUY transactions recorded for this ticker.
+
+      - name: sell_count
+        description: Total number of SELL transactions recorded for this ticker.  
