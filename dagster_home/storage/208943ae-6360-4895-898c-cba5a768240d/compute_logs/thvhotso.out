@@ -1,4 +1,0 @@
-Running with dbt=1.11.7
-Encountered an error:
-Parsing Error
-  Env var required but not provided: 'POSTGRES_USER'
