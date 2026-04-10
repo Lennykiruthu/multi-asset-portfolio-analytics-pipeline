@@ -86,8 +86,17 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
         return False, f"yfinance returned no OHLCV data for '{ticker}' from {start_str}."
 
     data = data.reset_index()
-    data.columns = [col.lower() for col in data.columns]
-    data.rename(columns={"Date": "date", "index": "date"}, inplace=True)
+    
+    # 1. Handle MultiIndex columns (e.g., ('Close', 'AAPL') -> 'Close')
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+
+    # 2. Standardize column names to lowercase strings
+    data.columns = [str(col).lower() for col in data.columns]
+    
+    # 3. Handle cases where the index was named 'Date' or 'index'
+    data.rename(columns={"date": "date", "index": "date"}, inplace=True)        
+
     data["date"] = pd.to_datetime(data["date"])
     data["ticker"] = ticker
     data["ingested_at"] = datetime.utcnow()
