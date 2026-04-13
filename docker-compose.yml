@@ -1,4 +1,7 @@
 services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — shared by portfolio models AND Dagster metadata
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:18
     restart: unless-stopped
@@ -9,12 +12,16 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d   # creates dagster_db on first boot      
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # ---------------------------------------------------------------------------
+  # dbt — run manually / triggered by Dagster; exits after each run
+  # ---------------------------------------------------------------------------
   dbt:
     build:
       context: .
@@ -29,6 +36,56 @@ services:
       - .env
     command: build --profiles-dir /usr/app/dbt  # default dbt command; override per need
 
+  # ---------------------------------------------------------------------------
+  # Dagster — webserver (UI) and daemon (schedules/sensors) share one image
+  # ---------------------------------------------------------------------------
+  dagster-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.dagster
+    container_name: portfolio_dagster_webserver
+    restart: unless-stopped
+    entrypoint: dagster-webserver
+    command: -h 0.0.0.0 -p 3000 -w /usr/app/dagster/workspace.yaml
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dagster_orchestration:/usr/app/dagster                                      # live code
+      - dagster_home:/opt/dagster/dagster_home                                        # run history
+      - ./dagster_home/dagster.yaml:/opt/dagster/dagster_home/dagster.yaml            # instance config
+    env_file:
+      - .env
+    environment:
+      - DAGSTER_HOME
+    depends_on:
+      postgres:
+        condition: service_healthy
+ 
+  dagster-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile.dagster
+    container_name: portfolio_dagster_daemon
+    restart: unless-stopped
+    entrypoint: dagster-daemon
+    command: run -w /usr/app/dagster/workspace.yaml
+    volumes:
+      - ./dagster_orchestration:/usr/app/dagster                                      # live code
+      - dagster_home:/opt/dagster/dagster_home                                        # shared with webserver
+      - ./dagster_home/dagster.yaml:/opt/dagster/dagster_home/dagster.yaml            # instance config
+      - ./portfolio_analytics:/usr/app/dbt                                            # dbt access
+    env_file:
+      - .env
+    environment:
+      - DAGSTER_HOME
+      - DBT_PROJECT_DIR=/usr/app/dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Superset — BI layer
+  # ---------------------------------------------------------------------------
   superset:
     build:
       context: .
@@ -49,3 +106,4 @@ services:
 
 volumes:
   postgres_data:
+  dagster_home:

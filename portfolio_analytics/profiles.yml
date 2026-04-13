@@ -3,7 +3,7 @@ portfolio_analytics:
   outputs:
     dev:
       dbname: portfolio_db
-      host: localhost
+      host: postgres
       password: "{{ env_var('POSTGRES_PASSWORD') }}"
       port: 5432
       schema: bronze

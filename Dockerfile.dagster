@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/app/dagster
+
+# Install the orchestration package (picks up setup.py + all dependencies)
+COPY dagster_orchestration/ .
+
+RUN pip install --no-cache-dir -e .
+
+# Dagster home is where run history, logs, and config live
+ENV DAGSTER_HOME=/opt/dagster/dagster_home
+RUN mkdir -p $DAGSTER_HOME
