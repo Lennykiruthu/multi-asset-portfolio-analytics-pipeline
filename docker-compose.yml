@@ -45,14 +45,15 @@ services:
       dockerfile: Dockerfile.dagster
     container_name: portfolio_dagster_webserver
     restart: unless-stopped
-    entrypoint: dagster-webserver
-    command: -h 0.0.0.0 -p 3000 -w /usr/app/dagster/workspace.yaml
+    entrypoint: ["/entrypoint.sh"]
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/usr/app/dagster/workspace.yaml"]
     ports:
       - "3000:3000"
     volumes:
       - ./dagster_orchestration:/usr/app/dagster                                      # live code
       - dagster_home:/opt/dagster/dagster_home                                        # run history
       - ./dagster_home/dagster.yaml:/opt/dagster/dagster_home/dagster.yaml            # instance config
+      - ./portfolio_analytics:/usr/app/dbt
     env_file:
       - .env
     environment:
@@ -67,8 +68,8 @@ services:
       dockerfile: Dockerfile.dagster
     container_name: portfolio_dagster_daemon
     restart: unless-stopped
-    entrypoint: dagster-daemon
-    command: run -w /usr/app/dagster/workspace.yaml
+    entrypoint: ["/entrypoint.sh"]
+    command: ["dagster-daemon", "run", "-w", "/usr/app/dagster/workspace.yaml"]
     volumes:
       - ./dagster_orchestration:/usr/app/dagster                                      # live code
       - dagster_home:/opt/dagster/dagster_home                                        # shared with webserver
