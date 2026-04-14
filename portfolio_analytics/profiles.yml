@@ -2,7 +2,7 @@ portfolio_analytics:
   target: dev
   outputs:
     dev:
-      dbname: portfolio_db
+      dbname: "{{ env_var('POSTGRES_DB') }}"
       host: postgres
       password: "{{ env_var('POSTGRES_PASSWORD') }}"
       port: 5432
