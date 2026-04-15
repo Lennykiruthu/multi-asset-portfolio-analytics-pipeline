@@ -77,6 +77,7 @@ def _deduplicate(df: pd.DataFrame, last_date) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 @asset(
+    key_prefix="bronze",    
     group_name="bronze",
     compute_kind="python",
     description="Daily OHLCV prices for all tracked tickers, sourced from yfinance.",

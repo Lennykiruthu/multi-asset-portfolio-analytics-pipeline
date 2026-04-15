@@ -74,6 +74,7 @@ def _fetch_series(series_id: str, alias: str, observation_start: str,
 # ---------------------------------------------------------------------------
 
 @asset(
+    key_prefix="bronze",     
     group_name="bronze",
     compute_kind="python",
     description=(

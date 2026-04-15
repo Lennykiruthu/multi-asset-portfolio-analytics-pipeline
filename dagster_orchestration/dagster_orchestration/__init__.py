@@ -6,7 +6,8 @@ from dagster import (
     AssetSelection,
     in_process_executor,
 )
-from dagster_dbt import DbtCliResource, build_dbt_asset_selection, dbt_assets
+from dagster import AssetKey
+from dagster_dbt import DbtCliResource, dbt_assets, DagsterDbtTranslator
 
 from dagster_orchestration.assets import raw_prices, raw_fred
 from dagster_orchestration.sensors import transaction_sensor
