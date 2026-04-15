@@ -13,7 +13,7 @@ from config import DATABASE_URL, BRONZE_SCHEMA
 
 load_dotenv()
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine("postgresql://postgres:onepiece@localhost:5432/portfolio_db")
 
 KNOWN_ASSETS = {
     "AAPL":    {"asset_name": "Apple Inc.",                      "asset_type": "Stock",   "sector": "Technology"},
