@@ -1,26 +1,12 @@
 from datetime import datetime, timedelta
 
+import os
 import pandas as pd
 import yfinance as yf
 from dagster import asset, AssetExecutionContext
 from sqlalchemy import text
 
 from dagster_orchestration.resources import PostgresResource
-
-# ---------------------------------------------------------------------------
-# Tickers to track — keep in sync with ledger-ui.py KNOWN_ASSETS
-# ---------------------------------------------------------------------------
-
-TICKERS = [
-    "AAPL", "MSFT", "GOOGL", "TSLA",   # Stocks
-    "SPY", "QQQ", "VTI",                # ETFs
-    "BTC-USD", "ETH-USD",               # Crypto
-    "GC=F",                             # Gold Futures
-]
-
-INITIAL_FETCH_PERIOD = "1y"
-BRONZE_SCHEMA = "bronze"
-
 
 # ---------------------------------------------------------------------------
 # Helpers (lifted from ingest-raw-prices.py, adapted for Dagster context)
@@ -32,6 +18,16 @@ def _get_last_loaded_date(engine):
         with engine.connect() as conn:
             result = conn.execute(text("SELECT MAX(date) FROM bronze.raw_prices"))
             return result.scalar()
+    except Exception:
+        return None
+
+
+def _get_unique_tickers(engine):
+    """Return all unique tickers from bronze.transactions."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT DISTINCT tickers FROM bronze.transactions"))
+            return [str(row[0]) for row in result]
     except Exception:
         return None
 
@@ -92,14 +88,20 @@ def raw_prices(context: AssetExecutionContext, postgres: PostgresResource) -> No
     """
     engine = postgres.get_engine()
 
+    tickers = _get_unique_tickers(engine)
+    if not tickers:
+        context.log.warning("No tickers found in bronze.transactions — skipping price fetch")
+        return
+    context.log.info(f"Fetching prices for {len(tickers)} tickers: {sorted(tickers)}")
+
     last_date = _get_last_loaded_date(engine)
     context.log.info(f"Last loaded date in bronze.raw_prices: {last_date}")
 
     if last_date is None:
-        df = _fetch_prices(TICKERS, context, period=INITIAL_FETCH_PERIOD)
+        df = _fetch_prices(tickers, context, period="1y")
     else:
         start = (pd.to_datetime(last_date) - timedelta(days=1)).strftime("%Y-%m-%d")
-        df = _fetch_prices(TICKERS, context, start_date=start)
+        df = _fetch_prices(tickers, context, start_date=start)
         before = len(df)
         df = _deduplicate(df, last_date)
         removed = before - len(df)
@@ -118,7 +120,7 @@ def raw_prices(context: AssetExecutionContext, postgres: PostgresResource) -> No
     df.to_sql(
         name="raw_prices",
         con=engine,
-        schema=BRONZE_SCHEMA,
+        schema=os.getenv("BRONZE_SCHEMA"),
         if_exists="append",
         index=False,
     )
