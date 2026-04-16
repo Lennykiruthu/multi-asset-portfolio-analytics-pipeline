@@ -5,15 +5,13 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from datetime import datetime, date, timedelta
 
-from config import DATABASE_URL, BRONZE_SCHEMA
-
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
 
 load_dotenv()
 
-engine = create_engine("postgresql://postgres:onepiece@localhost:5432/portfolio_db")
+engine = create_engine(os.getenv("DATABASE_URL"))
 
 KNOWN_ASSETS = {
     "AAPL":    {"asset_name": "Apple Inc.",                      "asset_type": "Stock",   "sector": "Technology"},
@@ -124,7 +122,7 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
         data.to_sql(
             name="raw_prices",
             con=engine,
-            schema=BRONZE_SCHEMA,
+            schema=os.getenv("BRONZE_SCHEMA"),
             if_exists="append",
             index=False,
         )
