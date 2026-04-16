@@ -27,6 +27,7 @@ services:
       context: .
       dockerfile: Dockerfile.dbt
     container_name: portfolio_dbt
+    user: "${UID}:${GID}"
     volumes:
       - ./portfolio_analytics:/usr/app/dbt
     depends_on:
