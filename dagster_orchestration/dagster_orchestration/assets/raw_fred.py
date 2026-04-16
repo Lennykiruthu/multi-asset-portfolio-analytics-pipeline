@@ -54,6 +54,16 @@ def _fetch_series(series_id: str, alias: str, observation_start: str,
     }
     context.log.info(f"Fetching FRED series {series_id} ({alias}) from {observation_start}")
     r = requests.get(BASE_URL, params=params, timeout=30)
+
+    # FRED occasionally returns 500 when data isn't yet available
+    # (common with lagged monthly series like CPI). Treat it as empty.
+    if r.status_code == 500:
+        context.log.warning(
+            f"FRED returned 500 for {series_id} (observation_start={observation_start}). "
+            "Series may not yet be available for this date range. Skipping."
+        )
+        return pd.DataFrame()
+    
     r.raise_for_status()
 
     observations = r.json().get("observations", [])
@@ -111,8 +121,11 @@ def raw_fred(context: AssetExecutionContext, postgres: PostgresResource) -> None
         if last_date is None:
             observation_start = "2015-01-01"
         else:
-            # Fetch from last date (FRED may revise recent values; safe overlap)
-            observation_start = pd.to_datetime(last_date).strftime("%Y-%m-%d")
+            # +1 day: skip the row we already have; avoids FRED 500s on
+            # lagged series (e.g. CPI) when requesting a date not yet published
+            observation_start = (
+                pd.to_datetime(last_date) + pd.Timedelta(days=1)
+            ).strftime("%Y-%m-%d")
 
         df = _fetch_series(series_id, alias, observation_start, api_key, context)
         if not df.empty:
