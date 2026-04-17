@@ -37,6 +37,27 @@ services:
       - .env
     command: build --profiles-dir /usr/app/dbt  # default dbt command; override per need
 
+  dbt-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbt
+    container_name: portfolio_dbt_init
+    user: "${UID}:${GID}"
+    volumes:
+      - ./portfolio_analytics:/usr/app/dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    command: compile --profiles-dir /usr/app/dbt
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /usr/app/dbt/target/manifest.json"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s    
+
   # ---------------------------------------------------------------------------
   # Dagster — webserver (UI) and daemon (schedules/sensors) share one image
   # ---------------------------------------------------------------------------
@@ -62,6 +83,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      dbt-init:                         
+        condition: service_completed_successfully        
  
   dagster-daemon:
     build:
@@ -84,6 +107,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      dbt-init:                         
+        condition: service_completed_successfully         
 
   # ---------------------------------------------------------------------------
   # Superset — BI layer
