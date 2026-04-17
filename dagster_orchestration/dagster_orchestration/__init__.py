@@ -55,7 +55,7 @@ def portfolio_dbt_assets(context, dbt: DbtCliResource):
 daily_pipeline_job = define_asset_job(
     name="daily_pipeline_job",
     selection=(
-        AssetSelection.assets(raw_prices, raw_fred)
+        AssetSelection.assets(raw_prices)
         | AssetSelection.assets(portfolio_dbt_assets)
     ),
     description=(
