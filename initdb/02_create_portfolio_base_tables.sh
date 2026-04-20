@@ -29,10 +29,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${POSTGRES_DB}" <<
     close       NUMERIC,
     volume      BIGINT,
     ingested_at TIMESTAMP NOT NULL,  
-    -- For downstream user  querying
-    user_id UUID REFERENCES users(id),    
     -- Prevents duplicate prices for the same day/ticker
-    PRIMARY KEY (date, ticker, user_id)
+    PRIMARY KEY (date, ticker)
     );
 
     -- Create the raw fred table (Federal Reserve API)
