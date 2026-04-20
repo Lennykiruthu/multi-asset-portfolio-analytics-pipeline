@@ -13,6 +13,9 @@ casted_fields AS (
         -- Primary key
         transaction_id::integer                         AS transaction_id,
 
+        -- User scoping
+        user_id                                         AS user_id,        
+
         -- Asset identifiers — normalise ticker to uppercase to match
         -- bronze.raw_prices (yfinance always returns uppercase)
         UPPER(TRIM(ticker))                             AS ticker,
@@ -62,6 +65,7 @@ casted_fields AS (
 
 SELECT
     transaction_id,
+    user_id,
     ticker,
     asset_name,
     asset_type,

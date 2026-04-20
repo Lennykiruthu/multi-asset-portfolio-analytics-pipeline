@@ -32,7 +32,10 @@ models:
         description: "Total trading volume for the day." 
 
       - name: ingested_at
-        description: "The timestamp of when this record was ingested into the raw source."                                        
+        description: "The timestamp of when this record was ingested into the raw source."     
+
+      - name: user_id
+        description: unique user id's from the user table                                   
 
   - name: stg_fred_macro
     description: >
@@ -143,6 +146,9 @@ models:
  
       - name: ingested_at
         description: "Timestamp (UTC) of when the row was written to bronze by the ledger UI."
+
+      - name: user_id
+        description: unique user id's from the user table        
          
       
 
