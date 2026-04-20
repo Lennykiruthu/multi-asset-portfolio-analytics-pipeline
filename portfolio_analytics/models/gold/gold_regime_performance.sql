@@ -78,6 +78,7 @@ holdings AS (
 
     SELECT
         price_date          AS date,
+        user_id,        
         ticker
     FROM {{ ref('int_daily_holdings') }}
     WHERE shares_held > 0
@@ -92,6 +93,7 @@ gated AS (
 
     SELECT
         p.date,
+        h.user_id,
         p.ticker,
         p.daily_return,
         p.log_return,
@@ -120,9 +122,10 @@ portfolio_daily AS (
 
     SELECT
         date,
+        user_id,
         ROUND(AVG(daily_return)::numeric, 6)    AS portfolio_avg_return
     FROM gated
-    GROUP BY date
+    GROUP BY date, user_id
 
 ),
 
@@ -135,7 +138,8 @@ with_relative AS (
             (g.daily_return - pd.portfolio_avg_return)::numeric, 6
         )                                                       AS return_vs_portfolio
     FROM gated          g
-    INNER JOIN portfolio_daily pd ON g.date = pd.date
+    INNER JOIN portfolio_daily pd ON  g.date = pd.date
+                                  AND g.user_id = pd.user_id
 
 ),
 
@@ -158,6 +162,7 @@ aggregated AS (
 
     SELECT
         -- ── Grain ─────────────────────────────────────────────────────────────
+        user_id,
         ticker,
         macro_regime,
         fed_stance,
@@ -238,6 +243,7 @@ aggregated AS (
 
     FROM with_relative
     GROUP BY
+        user_id,
         ticker,
         macro_regime,
         fed_stance,
@@ -278,4 +284,4 @@ final AS (
 )
 
 SELECT * FROM final
-ORDER BY ticker, macro_regime
+ORDER BY user_id, ticker, macro_regime

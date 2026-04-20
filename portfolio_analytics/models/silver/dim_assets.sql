@@ -45,6 +45,7 @@ WITH transactions AS (
 
 net_positions AS (
     SELECT
+        user_id,
         ticker,
 
         -- Use MAX on these — they are identical across rows for the same ticker
@@ -91,7 +92,7 @@ net_positions AS (
         COUNT(*) FILTER (WHERE transaction_type = 'SELL') AS sell_count
 
     FROM transactions
-    GROUP BY ticker
+    GROUP BY user_id, ticker
 ),
 
 -- ── 2. Latest market price per ticker ─────────────────────────────────────
@@ -111,6 +112,7 @@ latest_price AS (
 
 joined AS (
     SELECT
+        n.user_id,
         n.ticker,
         n.asset_name,
         n.asset_type,
@@ -177,13 +179,13 @@ with_weights AS (
 
         ROUND(
             current_value
-            / NULLIF(SUM(current_value) OVER (), 0) * 100,
+            / NULLIF(SUM(current_value) OVER (PARTITION BY user_id), 0) * 100,
             2
         ) AS weight_pct,
 
         ROUND(
             current_value
-            / NULLIF(SUM(current_value) OVER (), 0),
+            / NULLIF(SUM(current_value) OVER (PARTITION BY user_id), 0),
             4
         ) AS weight_decimal
 
@@ -193,6 +195,7 @@ with_weights AS (
 -- ── Final select ──────────────────────────────────────────────────────────
 
 SELECT
+    user_id,
     ticker,
     asset_name,
     asset_type,
@@ -228,4 +231,4 @@ SELECT
     sell_count
 
 FROM with_weights
-ORDER BY weight_pct DESC
+ORDER BY user_id, weight_pct DESC

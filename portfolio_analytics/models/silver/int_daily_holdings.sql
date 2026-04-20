@@ -37,6 +37,7 @@
 
 WITH transactions AS (
     SELECT
+        user_id,
         ticker,
         transaction_date,
         quantity  -- positive for BUY, negative for SELL (enforced in stg_transactions)
@@ -49,10 +50,11 @@ WITH transactions AS (
 
 running_positions AS (
     SELECT
+        user_id,
         ticker,
         transaction_date,
         SUM(quantity) OVER (
-            PARTITION BY ticker
+            PARTITION BY user_id, ticker
             ORDER BY transaction_date
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         )::numeric(18, 8) AS shares_after_transaction
@@ -79,9 +81,10 @@ date_spine AS (
 ticker_spine AS (
     SELECT
         s.price_date,
+        t.user_id,
         t.ticker
     FROM date_spine s
-    CROSS JOIN (SELECT DISTINCT ticker FROM transactions) t
+    CROSS JOIN (SELECT DISTINCT user_id, ticker FROM transactions) t
 ),
 
 -- ── 4. Join transaction events onto spine ─────────────────────────────────
@@ -91,12 +94,14 @@ ticker_spine AS (
 spine_with_events AS (
     SELECT
         ts.price_date,
+        ts.user_id,
         ts.ticker,
         rp.shares_after_transaction
     FROM ticker_spine ts
     LEFT JOIN running_positions rp
         ON  ts.price_date = rp.transaction_date
         AND ts.ticker     = rp.ticker
+        AND ts.user_id    = rp.user_id
 ),
 
 -- ── 5. Forward-fill shares ────────────────────────────────────────────────
@@ -111,10 +116,11 @@ spine_with_events AS (
 fill_groups AS (
     SELECT
         price_date,
+        user_id,
         ticker,
         shares_after_transaction,
         COUNT(shares_after_transaction) OVER (
-            PARTITION BY ticker
+            PARTITION BY user_id, ticker
             ORDER BY price_date
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS fill_group
@@ -124,15 +130,17 @@ fill_groups AS (
 filled AS (
     SELECT
         price_date,
+        user_id,
         ticker,
         MAX(shares_after_transaction) OVER (
-            PARTITION BY ticker, fill_group
+            PARTITION BY user_id, ticker, fill_group
         ) AS shares_held
     FROM fill_groups
 )
 
 SELECT
     price_date,
+    user_id,
     ticker,
     -- Coalesce so pre-first-buy dates show 0 rather than NULL.
     -- Downstream joins can filter WHERE shares_held > 0 to skip
@@ -140,4 +148,4 @@ SELECT
     COALESCE(shares_held, 0)::numeric(18, 8) AS shares_held
 
 FROM filled
-ORDER BY ticker, price_date
+ORDER BY user_id, ticker, price_date

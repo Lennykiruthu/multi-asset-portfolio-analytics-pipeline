@@ -17,8 +17,7 @@ staged AS (
         round(low::numeric, 4)   AS low,                
         round(close::numeric, 4) AS close,       
         volume::bigint           AS volume,
-        ingested_at,
-        user_id 
+        ingested_at
     FROM source
 )
 

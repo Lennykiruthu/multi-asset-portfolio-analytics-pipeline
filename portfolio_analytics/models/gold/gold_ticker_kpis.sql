@@ -38,6 +38,7 @@
 WITH timeseries AS (
     SELECT
         price_date,
+        user_id,
         ticker,
         ticker_market_value,
         ticker_daily_return,
@@ -47,6 +48,7 @@ WITH timeseries AS (
 
 assets AS (
     SELECT
+        user_id,
         ticker,
         asset_name,
         asset_type,
@@ -58,28 +60,31 @@ assets AS (
 
 -- ── Latest market value per ticker ─────────────────────────────────────────
 latest_value AS (
-    SELECT DISTINCT ON (ticker)
+    SELECT DISTINCT ON (user_id, ticker)
+        user_id,
         ticker,
         ticker_market_value         AS total_portfolio_value,
         price_date                  AS last_held_date
     FROM timeseries
     WHERE ticker_market_value IS NOT NULL
-    ORDER BY ticker, price_date DESC
+    ORDER BY user_id, ticker, price_date DESC
 ),
 
 -- ── Earliest held date per ticker ──────────────────────────────────────────
 first_held AS (
     SELECT
+        user_id,
         ticker,
         MIN(price_date) AS first_buy_date
     FROM timeseries
     WHERE ticker_market_value IS NOT NULL
-    GROUP BY ticker
+    GROUP BY user_id, ticker
 ),
 
 -- ── Sharpe ratio per ticker ────────────────────────────────────────────────
 ticker_sharpe AS (
     SELECT
+        user_id,
         ticker,
         ROUND(
             (AVG(ticker_daily_return) / NULLIF(STDDEV_SAMP(ticker_daily_return), 0))
@@ -88,20 +93,22 @@ ticker_sharpe AS (
         ) AS sharpe_ratio
     FROM timeseries
     WHERE ticker_daily_return IS NOT NULL
-    GROUP BY ticker
+    GROUP BY user_id, ticker
 ),
 
 -- ── Max drawdown per ticker ────────────────────────────────────────────────
 ticker_max_drawdown AS (
     SELECT
+        user_id, 
         ticker,
         ROUND(MIN(ticker_drawdown)::numeric, 4) AS max_drawdown
     FROM timeseries
-    GROUP BY ticker
+    GROUP BY user_id, ticker
 )
 
 SELECT
     -- ── Dimensions ────────────────────────────────────────────────────────
+    a.user_id,
     a.ticker,
     a.asset_name,
     a.asset_type,
@@ -126,4 +133,4 @@ LEFT JOIN first_held        fh ON a.ticker = fh.ticker
 LEFT JOIN ticker_sharpe     ts ON a.ticker = ts.ticker
 LEFT JOIN ticker_max_drawdown td ON a.ticker = td.ticker
 
-ORDER BY total_portfolio_value DESC NULLS LAST
+ORDER BY a.user_id, total_portfolio_value DESC NULLS LAST

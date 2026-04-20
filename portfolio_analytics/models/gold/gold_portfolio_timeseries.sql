@@ -36,6 +36,7 @@ WITH daily_prices AS (
 holdings AS (
     SELECT
         price_date,
+        user_id,
         ticker,
         shares_held
     FROM {{ ref("int_daily_holdings") }}
@@ -46,9 +47,10 @@ holdings AS (
 daily_ticker_value AS (
     SELECT
         d.price_date,
+        h.user_id,
         d.ticker,
         d.close,
-        h.shares_held                                       AS net_shares,
+        h.shares_held                                      AS net_shares,
         ROUND((d.close * h.shares_held)::numeric, 2)       AS ticker_market_value
     FROM daily_prices d
     INNER JOIN holdings h
@@ -69,36 +71,42 @@ date_spine AS (
 ticker_spine AS (
     SELECT
         s.price_date,
+        t.user_id,
         t.ticker
     FROM date_spine s
-    CROSS JOIN (SELECT DISTINCT ticker FROM {{ ref("int_daily_holdings") }}) t
+    CROSS JOIN (
+        SELECT DISTINCT user_id, ticker FROM {{ ref("int_daily_holdings") }}
+    ) t
 ),
 
 -- Tag each row with its last known non-null fill group
 ticker_filled_groups AS (
     SELECT
         ts.price_date,
+        ts.user_id,
         ts.ticker,
         dtv.close,
         dtv.net_shares,
         dtv.ticker_market_value,
         COUNT(dtv.ticker_market_value) OVER (
-            PARTITION BY ts.ticker ORDER BY ts.price_date
+            PARTITION BY ts.user_id, ts.ticker ORDER BY ts.price_date
         ) AS fill_group
     FROM ticker_spine ts
     LEFT JOIN daily_ticker_value dtv
         ON  ts.price_date = dtv.price_date
         AND ts.ticker     = dtv.ticker
+        AND ts.user_id    = dtv.user_id
 ),
 
 -- Forward-fill close, net_shares, and ticker_market_value within each group
 ticker_filled AS (
     SELECT
         price_date,
+        user_id,
         ticker,
-        MAX(close)                OVER (PARTITION BY ticker, fill_group) AS close,
-        MAX(net_shares)           OVER (PARTITION BY ticker, fill_group) AS net_shares,
-        MAX(ticker_market_value)  OVER (PARTITION BY ticker, fill_group) AS ticker_market_value
+        MAX(close)                OVER (PARTITION BY user_id, ticker, fill_group) AS close,
+        MAX(net_shares)           OVER (PARTITION BY user_id, ticker, fill_group) AS net_shares,
+        MAX(ticker_market_value)  OVER (PARTITION BY user_id, ticker, fill_group) AS ticker_market_value
     FROM ticker_filled_groups
 ),
 
@@ -106,26 +114,27 @@ ticker_filled AS (
 with_ticker_return AS (
     SELECT
         price_date,
+        user_id,
         ticker,
         close,
         net_shares,
         ticker_market_value,
         LAG(ticker_market_value) OVER (
-            PARTITION BY ticker ORDER BY price_date
+            PARTITION BY user_id, ticker ORDER BY price_date
         ) AS prev_ticker_market_value,
 
         CASE
             WHEN LAG(ticker_market_value) OVER (
-                     PARTITION BY ticker ORDER BY price_date
+                     PARTITION BY user_id, ticker ORDER BY price_date
                  ) IS NOT NULL
              AND LAG(ticker_market_value) OVER (
-                     PARTITION BY ticker ORDER BY price_date
+                     PARTITION BY user_id, ticker ORDER BY price_date
                  ) != 0
             THEN ROUND(
                 (ticker_market_value - LAG(ticker_market_value) OVER (
-                    PARTITION BY ticker ORDER BY price_date
+                    PARTITION BY user_id, ticker ORDER BY price_date
                 )) / LAG(ticker_market_value) OVER (
-                    PARTITION BY ticker ORDER BY price_date
+                    PARTITION BY user_id, ticker ORDER BY price_date
                 ),
                 6
             )
@@ -137,6 +146,7 @@ with_ticker_return AS (
 with_ticker_drawdown AS (
     SELECT
         price_date,
+        user_id,
         ticker,
         close,
         net_shares,
@@ -144,18 +154,18 @@ with_ticker_drawdown AS (
         ticker_daily_return,
 
         MAX(ticker_market_value) OVER (
-            PARTITION BY ticker
+            PARTITION BY user_id, ticker
             ORDER BY price_date
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         ) AS ticker_running_peak,
 
         ROUND(
             (ticker_market_value - MAX(ticker_market_value) OVER (
-                PARTITION BY ticker
+                PARTITION BY user_id, ticker
                 ORDER BY price_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             )) / NULLIF(MAX(ticker_market_value) OVER (
-                PARTITION BY ticker
+                PARTITION BY user_id, ticker
                 ORDER BY price_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ), 0),
@@ -167,6 +177,7 @@ with_ticker_drawdown AS (
 
 SELECT
     price_date,
+    user_id,
     ticker,
     close,
     net_shares,
@@ -175,4 +186,4 @@ SELECT
     ticker_running_peak,
     ticker_drawdown
 FROM with_ticker_drawdown
-ORDER BY price_date, ticker
+ORDER BY user_id, price_date, ticker

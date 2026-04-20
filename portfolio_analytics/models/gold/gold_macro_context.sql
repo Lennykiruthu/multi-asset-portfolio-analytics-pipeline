@@ -30,6 +30,7 @@ WITH portfolio AS (
 
     SELECT
         price_date                  AS date,
+        user_id,
         ticker,
         close,
         net_shares,
@@ -52,6 +53,7 @@ joined AS (
     SELECT
         -- ── Dimensions ────────────────────────────────────────────────────────
         p.date,
+        p.user_id,
         p.ticker,
 
         -- ── Ticker-level performance ──────────────────────────────────────────
@@ -88,19 +90,19 @@ joined AS (
         -- compares against the previous row in this ticker's own sequence).
         CASE
             WHEN m.macro_regime != LAG(m.macro_regime) OVER (
-                PARTITION BY p.ticker ORDER BY p.date
+                PARTITION BY p.user_id, p.ticker ORDER BY p.date
             )
             THEN true
             ELSE false
         END                                                     AS regime_changed,
 
         LAG(m.macro_regime) OVER (
-            PARTITION BY p.ticker ORDER BY p.date
+            PARTITION BY p.user_id, p.ticker ORDER BY p.date
         )                                                       AS previous_regime,
 
         -- ── Global row number per ticker — used by islands trick below ─────────
         ROW_NUMBER() OVER (
-            PARTITION BY p.ticker ORDER BY p.date
+            PARTITION BY p.user_id, p.ticker ORDER BY p.date
         )                                                       AS rn
 
     FROM portfolio p
@@ -112,6 +114,7 @@ final AS (
 
     SELECT
         date,
+        user_id, 
         ticker,
         close,
         net_shares,
@@ -143,6 +146,7 @@ final AS (
         -- independently per ticker when the regime changes.
         ROW_NUMBER() OVER (
             PARTITION BY
+                user_id,
                 ticker,
                 macro_regime,
                 (date::date - (rn || ' days')::interval)::date
@@ -154,4 +158,4 @@ final AS (
 )
 
 SELECT * FROM final
-ORDER BY date, ticker
+ORDER BY user_id, date, ticker
