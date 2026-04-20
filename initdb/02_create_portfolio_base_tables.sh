@@ -7,6 +7,17 @@ echo ">>> Creating tables in database: ${POSTGRES_DB}"
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${POSTGRES_DB}" <<-EOSQL
     CREATE SCHEMA IF NOT EXISTS bronze;
 
+    -- Create users table
+
+    CREATE TABLE IF NOT EXISTS users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email         VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name     VARCHAR(255),
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    is_active     BOOLEAN DEFAULT TRUE
+    );    
+
     -- Create the raw prices table (yfinance)
 
     CREATE TABLE IF NOT EXISTS bronze.raw_prices (
@@ -19,7 +30,9 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${POSTGRES_DB}" <<
     volume      BIGINT,
     ingested_at TIMESTAMP NOT NULL,  
     -- Prevents duplicate prices for the same day/ticker
-    PRIMARY KEY (date, ticker)    
+    PRIMARY KEY (date, ticker),    
+    -- For downstream user  querying
+    user_id UUID REFERENCES users(id)
     );
 
     -- Create the raw fred table (Federal Reserve API)
@@ -31,7 +44,9 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${POSTGRES_DB}" <<
     value           NUMERIC,
     ingested_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     -- Matches your _get_last_loaded_date logic for quick lookups
-    PRIMARY KEY (date, series_id)    
+    PRIMARY KEY (date, series_id),    
+    -- For downstream user  querying
+    user_id UUID REFERENCES users(id)    
     );
 
     -- Create the transactions table
@@ -45,7 +60,9 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${POSTGRES_DB}" <<
     quantity        NUMERIC NOT NULL,
     purchase_price  NUMERIC NOT NULL,
     purchase_date   DATE NOT NULL,
-    ingested_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ingested_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- For downstream user  querying
+    user_id UUID REFERENCES users(id)    
     );    
 EOSQL
 
