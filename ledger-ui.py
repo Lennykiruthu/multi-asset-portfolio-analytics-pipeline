@@ -13,6 +13,7 @@ from datetime import datetime, date, timedelta
 load_dotenv()
 
 engine = create_engine(os.getenv("DATABASE_URL"))
+TEST_USER_ID = os.getenv("TEST_USER_ID")
 
 KNOWN_ASSETS = {
     "AAPL":    {"asset_name": "Apple Inc.",                      "asset_type": "Stock",   "sector": "Technology"},
@@ -135,7 +136,7 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
 # DB helpers
 # ---------------------------------------------------------------------------
 
-def fetch_transactions() -> pd.DataFrame:
+def fetch_transactions(user_id: str) -> pd.DataFrame:
     """Pull all rows from bronze.transactions, newest first."""
     try:
         with engine.connect() as conn:
@@ -152,8 +153,9 @@ def fetch_transactions() -> pd.DataFrame:
                     purchase_date,
                     ingested_at
                 FROM bronze.transactions
+                WHERE user_id = :user_id
                 ORDER BY ingested_at DESC
-            """))
+            """), {"user_id": user_id})
             rows = result.fetchall()
             return pd.DataFrame(rows, columns=result.keys())
     except Exception as e:
@@ -170,6 +172,7 @@ def insert_transaction(
     quantity: float,
     purchase_price: float,
     purchase_date: date,
+    user_id: str,
 ) -> bool:
     """
     Insert one transaction row. BUY → positive quantity, SELL → negative.
@@ -180,10 +183,10 @@ def insert_transaction(
     sql = text("""
         INSERT INTO bronze.transactions
             (ticker, asset_name, asset_type, sector,
-             quantity, purchase_price, purchase_date, ingested_at)
+             quantity, purchase_price, purchase_date, ingested_at, user_id)
         VALUES
             (:ticker, :asset_name, :asset_type, :sector,
-             :quantity, :purchase_price, :purchase_date, :ingested_at)
+             :quantity, :purchase_price, :purchase_date, :ingested_at, :user_id)
     """)
 
     try:
@@ -197,6 +200,7 @@ def insert_transaction(
                 "purchase_price": purchase_price,
                 "purchase_date":  purchase_date,
                 "ingested_at":    datetime.utcnow(),
+                "user_id":        user_id,
             })
         return True
     except Exception as e:
@@ -209,8 +213,8 @@ def delete_transaction(transaction_id: str) -> bool:
     try:
         with engine.begin() as conn:
             conn.execute(
-                text("DELETE FROM bronze.transactions WHERE transaction_id = :id"),
-                {"id": str(transaction_id)} # Ensure it is sent as a string
+                text("DELETE FROM bronze.transactions WHERE transaction_id = :id AND user_id = :user_id"),
+                {"id": str(transaction_id), "user_id": user_id} # Ensure it is sent as a string
             )
         return True
     except Exception as e:
@@ -360,6 +364,7 @@ if submit:
                 quantity=quantity,
                 purchase_price=purchase_price,
                 purchase_date=purchase_date,
+                user_id=TEST_USER_ID
             )
 
             if success:
@@ -374,7 +379,7 @@ if submit:
 
 st.subheader("Transaction Ledger")
 
-df = fetch_transactions()
+df = fetch_transactions(user_id=TEST_USER_ID)
 
 if df.empty:
     st.info("No transactions found. Add your first one using the sidebar.")
@@ -450,7 +455,7 @@ with st.expander("🗑️ Delete a transaction (corrections only)"):
             if st.button("🔥 Confirm Permanent Delete", type="primary"):
                 # Use the ID stored from our search
                 target_id = st.session_state.row_to_delete['transaction_id']
-                if delete_transaction(str(target_id)):
+                if delete_transaction(str(target_id), TEST_USER_ID):
                     st.success(f"Transaction {target_id} deleted.")
                     # Reset state and refresh
                     st.session_state.delete_confirm = False
