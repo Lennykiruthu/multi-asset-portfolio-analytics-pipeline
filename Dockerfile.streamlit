@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir --root-user-action=ignore \
     streamlit \
     pandas \
     yfinance \
@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir \
     psycopg2-binary \
     python-dotenv
 
-COPY ledger-ui.py .
+COPY streamlit/auth.py .
+COPY streamlit/ledger-ui.py .
 
 EXPOSE 8501
 

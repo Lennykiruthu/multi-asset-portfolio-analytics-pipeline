@@ -147,7 +147,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+  # ---------------------------------------------------------------------------
+  # Fast API - Authentication service
+  # ---------------------------------------------------------------------------
+  auth:
+    build: ./services/auth
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}  # in your .env file
+    depends_on:
+      - postgres
 
 volumes:
   postgres_data:
   dagster_home:
+
