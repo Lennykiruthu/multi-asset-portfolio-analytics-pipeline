@@ -5,6 +5,7 @@ import yfinance as yf
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from datetime import datetime, date, timedelta
+from auth import require_auth
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -13,7 +14,6 @@ from datetime import datetime, date, timedelta
 load_dotenv()
 
 engine = create_engine(os.getenv("DATABASE_URL"))
-TEST_USER_ID = os.getenv("TEST_USER_ID")
 
 KNOWN_ASSETS = {
     "AAPL":    {"asset_name": "Apple Inc.",                      "asset_type": "Stock",   "sector": "Technology"},
@@ -208,13 +208,13 @@ def insert_transaction(
         return False
 
 
-def delete_transaction(transaction_id: str) -> bool:
+def delete_transaction(transaction_id: str, user_id: str) -> bool:
     """Hard-delete a single transaction by ID (corrections only)."""
     try:
         with engine.begin() as conn:
             conn.execute(
                 text("DELETE FROM bronze.transactions WHERE transaction_id = :id AND user_id = :user_id"),
-                {"id": str(transaction_id), "user_id": user_id} # Ensure it is sent as a string
+                {"id": str(transaction_id), "user_id": user_id}
             )
         return True
     except Exception as e:
@@ -231,12 +231,26 @@ st.set_page_config(
     layout="wide",
 )
 
+require_auth()
+user_id = st.session_state.user_id
+
 st.title("📊 Portfolio Transaction Ledger")
 st.caption(
     "Logs BUY / SELL transactions to `bronze.transactions`. "
     "New tickers are validated against yfinance and their price history is "
     "backfilled into `bronze.raw_prices` before the transaction is written."
 )
+
+# ---------------------------------------------------------------------------
+# Sidebar — welcome + logout
+# ---------------------------------------------------------------------------
+
+st.sidebar.write(f"👤 Welcome, **{st.session_state.full_name}**")
+if st.sidebar.button("Logout", use_container_width=True):
+    st.session_state.clear()
+    st.rerun()
+
+st.sidebar.divider()
 
 # ---------------------------------------------------------------------------
 # Sidebar — transaction entry form
@@ -364,7 +378,7 @@ if submit:
                 quantity=quantity,
                 purchase_price=purchase_price,
                 purchase_date=purchase_date,
-                user_id=TEST_USER_ID
+                user_id=user_id
             )
 
             if success:
@@ -374,96 +388,107 @@ if submit:
                 st.rerun()
 
 # ---------------------------------------------------------------------------
-# Main area — ledger view
+# Main area — tabs
 # ---------------------------------------------------------------------------
 
-st.subheader("Transaction Ledger")
+tab1, tab2 = st.tabs(["Transactions", "Portfolio Analytics"])
 
-df = fetch_transactions(user_id=TEST_USER_ID)
+with tab1:
 
-if df.empty:
-    st.info("No transactions found. Add your first one using the sidebar.")
-else:
-    buys  = df[df["side"] == "BUY"]
-    sells = df[df["side"] == "SELL"]
+    # ---------------------------------------------------------------------------
+    # Ledger view
+    # ---------------------------------------------------------------------------
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total transactions", len(df))
-    col2.metric("BUY transactions",   len(buys))
-    col3.metric("SELL transactions",  len(sells))
-    col4.metric("Unique tickers",     df["ticker"].nunique())
+    st.subheader("Transaction Ledger")
 
-    st.divider()
+    df = fetch_transactions(user_id=user_id)
 
-    all_tickers   = sorted(df["ticker"].unique().tolist())
-    filter_ticker = st.multiselect("Filter by ticker", options=all_tickers, placeholder="Show all")
-    display_df    = df[df["ticker"].isin(filter_ticker)] if filter_ticker else df.copy()
+    if df.empty:
+        st.info("No transactions found. Add your first one using the sidebar.")
+    else:
+        buys  = df[df["side"] == "BUY"]
+        sells = df[df["side"] == "SELL"]
 
-    display_df = display_df.copy()
-    display_df["purchase_price"] = display_df["purchase_price"].apply(lambda x: f"${x:,.4f}")
-    display_df["quantity"]       = display_df["quantity"].apply(lambda x: f"{x:,.8g}")
-    display_df["ingested_at"]    = pd.to_datetime(display_df["ingested_at"]).dt.strftime("%Y-%m-%d %H:%M UTC")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total transactions", len(df))
+        col2.metric("BUY transactions",   len(buys))
+        col3.metric("SELL transactions",  len(sells))
+        col4.metric("Unique tickers",     df["ticker"].nunique())
 
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-# --- State Management (Place this at the top of your app script) ---
-if 'delete_confirm' not in st.session_state:
-    st.session_state.delete_confirm = False
-if 'row_to_delete' not in st.session_state:
-    st.session_state.row_to_delete = None
-
-# ── Delete / correction tool ───────────────────────────────────────────
-with st.expander("🗑️ Delete a transaction (corrections only)"):
-    st.warning(
-        "This permanently removes the row from `bronze.transactions`. "
-        "Use only to fix data entry mistakes."
-    )
-
-    # 1. Input Field
-    del_id = st.text_input("Transaction ID to delete", key="del_id_input")
-
-    # 2. Search Button
-    if st.button("Search for Transaction", type="secondary"):
-        if not del_id:
-            st.warning("Please enter an ID.")
-        else:
-            with engine.connect() as conn:
-                # We cast to str() here to ensure the placeholder :id is treated as a string
-                row = conn.execute(
-                    text("SELECT * FROM bronze.transactions WHERE transaction_id = :id"),
-                    {"id": str(del_id)} 
-                ).fetchone()
-
-            if row is None:
-                st.error(f"No transaction with ID {del_id} found.")
-                st.session_state.delete_confirm = False
-            else:
-                # Store row in state so it persists during the next rerun
-                st.session_state.row_to_delete = dict(row._mapping)
-                st.session_state.delete_confirm = True
-
-    # 3. Confirmation UI (Only shows if a row was found)
-    if st.session_state.delete_confirm:
         st.divider()
-        st.write("### Review Row for Deletion")
-        st.json(st.session_state.row_to_delete)
-        
-        st.error("Are you absolutely sure? This cannot be undone.")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔥 Confirm Permanent Delete", type="primary"):
-                # Use the ID stored from our search
-                target_id = st.session_state.row_to_delete['transaction_id']
-                if delete_transaction(str(target_id), TEST_USER_ID):
-                    st.success(f"Transaction {target_id} deleted.")
-                    # Reset state and refresh
+
+        all_tickers   = sorted(df["ticker"].unique().tolist())
+        filter_ticker = st.multiselect("Filter by ticker", options=all_tickers, placeholder="Show all")
+        display_df    = df[df["ticker"].isin(filter_ticker)] if filter_ticker else df.copy()
+
+        display_df = display_df.copy()
+        display_df["purchase_price"] = display_df["purchase_price"].apply(lambda x: f"${x:,.4f}")
+        display_df["quantity"]       = display_df["quantity"].apply(lambda x: f"{x:,.8g}")
+        display_df["ingested_at"]    = pd.to_datetime(display_df["ingested_at"]).dt.strftime("%Y-%m-%d %H:%M UTC")
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    # --- State Management ---
+    if 'delete_confirm' not in st.session_state:
+        st.session_state.delete_confirm = False
+    if 'row_to_delete' not in st.session_state:
+        st.session_state.row_to_delete = None
+
+    # ── Delete / correction tool ───────────────────────────────────────────
+    with st.expander("🗑️ Delete a transaction (corrections only)"):
+        st.warning(
+            "This permanently removes the row from `bronze.transactions`. "
+            "Use only to fix data entry mistakes."
+        )
+
+        # 1. Input Field
+        del_id = st.text_input("Transaction ID to delete", key="del_id_input")
+
+        # 2. Search Button
+        if st.button("Search for Transaction", type="secondary"):
+            if not del_id:
+                st.warning("Please enter an ID.")
+            else:
+                with engine.connect() as conn:
+                    # We cast to str() here to ensure the placeholder :id is treated as a string
+                    row = conn.execute(
+                        text("SELECT * FROM bronze.transactions WHERE transaction_id = :id"),
+                        {"id": str(del_id)}
+                    ).fetchone()
+
+                if row is None:
+                    st.error(f"No transaction with ID {del_id} found.")
+                    st.session_state.delete_confirm = False
+                else:
+                    # Store row in state so it persists during the next rerun
+                    st.session_state.row_to_delete = dict(row._mapping)
+                    st.session_state.delete_confirm = True
+
+        # 3. Confirmation UI (Only shows if a row was found)
+        if st.session_state.delete_confirm:
+            st.divider()
+            st.write("### Review Row for Deletion")
+            st.json(st.session_state.row_to_delete)
+
+            st.error("Are you absolutely sure? This cannot be undone.")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔥 Confirm Permanent Delete", type="primary"):
+                    # Use the ID stored from our search
+                    target_id = st.session_state.row_to_delete['transaction_id']
+                    if delete_transaction(str(target_id), user_id):
+                        st.success(f"Transaction {target_id} deleted.")
+                        # Reset state and refresh
+                        st.session_state.delete_confirm = False
+                        st.session_state.row_to_delete = None
+                        st.rerun()
+
+            with col2:
+                if st.button("Cancel"):
                     st.session_state.delete_confirm = False
                     st.session_state.row_to_delete = None
                     st.rerun()
-        
-        with col2:
-            if st.button("Cancel"):
-                st.session_state.delete_confirm = False
-                st.session_state.row_to_delete = None
-                st.rerun()
+
+with tab2:
+    pass
