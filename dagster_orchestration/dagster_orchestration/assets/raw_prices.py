@@ -26,7 +26,7 @@ def _get_unique_tickers(engine):
     """Return all unique tickers from bronze.transactions."""
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT DISTINCT tickers FROM bronze.transactions"))
+            result = conn.execute(text("SELECT DISTINCT ticker FROM bronze.transactions"))
             return [str(row[0]) for row in result]
     except Exception:
         return None
