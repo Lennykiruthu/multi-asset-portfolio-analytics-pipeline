@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir --root-user-action=ignore \
     yfinance \
     sqlalchemy \
     psycopg2-binary \
-    python-dotenv
+    python-dotenv \
+    plotly
 
 COPY streamlit/auth.py .
 COPY streamlit/ledger-ui.py .

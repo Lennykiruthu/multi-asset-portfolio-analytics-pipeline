@@ -1,6 +1,8 @@
 import os
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import yfinance as yf
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
@@ -35,11 +37,6 @@ ASSET_TYPES = ["Stock", "ETF", "Crypto", "Futures", "Bond", "Other"]
 # ---------------------------------------------------------------------------
 
 def validate_ticker(ticker: str) -> tuple[bool, str]:
-    """
-    Confirm the ticker exists on yfinance by fetching 5 days of recent history.
-    Returns (is_valid, error_message).
-    A ticker is considered valid if yfinance returns at least one row of price data.
-    """
     try:
         hist = yf.Ticker(ticker).history(period="5d")
         if hist.empty:
@@ -50,7 +47,6 @@ def validate_ticker(ticker: str) -> tuple[bool, str]:
 
 
 def ticker_exists_in_bronze(ticker: str) -> bool:
-    """Check whether bronze.raw_prices already has any rows for this ticker."""
     with engine.connect() as conn:
         result = conn.execute(
             text("SELECT 1 FROM bronze.raw_prices WHERE ticker = :ticker LIMIT 1"),
@@ -60,16 +56,6 @@ def ticker_exists_in_bronze(ticker: str) -> bool:
 
 
 def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
-    """
-    Fetch OHLCV history for a single ticker from from_date to today and
-    append any rows not already in bronze.raw_prices.
-
-    Called when the user logs a transaction for a ticker that has no price
-    history in the bronze layer yet — ensures dbt has data to work with on
-    its next run.
-
-    Returns (success, message).
-    """
     start_str = from_date.strftime("%Y-%m-%d")
 
     try:
@@ -86,27 +72,20 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
         return False, f"yfinance returned no OHLCV data for '{ticker}' from {start_str}."
 
     data = data.reset_index()
-    
-    # 1. Handle MultiIndex columns (e.g., ('Close', 'AAPL') -> 'Close')
+
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
 
-    # 2. Standardize column names to lowercase strings
     data.columns = [str(col).lower() for col in data.columns]
-    
-    # 3. Handle cases where the index was named 'Date' or 'index'
-    data.rename(columns={"date": "date", "index": "date"}, inplace=True)        
+    data.rename(columns={"date": "date", "index": "date"}, inplace=True)
 
     data["date"] = pd.to_datetime(data["date"])
     data["ticker"] = ticker
     data["ingested_at"] = datetime.utcnow()
 
-
-    # Keep only the columns bronze.raw_prices expects
     data = data[["date", "ticker", "open", "high", "low", "close", "volume", "ingested_at"]]
     data = data.dropna(subset=["close", "open", "high", "low"])
 
-    # Deduplicate against what's already loaded (safety net for partial runs)
     with engine.connect() as conn:
         existing = conn.execute(
             text("SELECT date FROM bronze.raw_prices WHERE ticker = :ticker"),
@@ -133,11 +112,10 @@ def backfill_prices(ticker: str, from_date: date) -> tuple[bool, str]:
         return False, f"Database write failed for '{ticker}' price history: {e}"
 
 # ---------------------------------------------------------------------------
-# DB helpers
+# DB helpers — transactions
 # ---------------------------------------------------------------------------
 
 def fetch_transactions(user_id: str) -> pd.DataFrame:
-    """Pull all rows from bronze.transactions, newest first."""
     try:
         with engine.connect() as conn:
             result = conn.execute(text("""
@@ -164,22 +142,10 @@ def fetch_transactions(user_id: str) -> pd.DataFrame:
 
 
 def insert_transaction(
-    ticker: str,
-    asset_name: str,
-    asset_type: str,
-    sector: str,
-    side: str,
-    quantity: float,
-    purchase_price: float,
-    purchase_date: date,
-    user_id: str,
+    ticker, asset_name, asset_type, sector,
+    side, quantity, purchase_price, purchase_date, user_id,
 ) -> bool:
-    """
-    Insert one transaction row. BUY → positive quantity, SELL → negative.
-    Only called after validation and price backfill have already passed.
-    """
     signed_quantity = quantity if side == "BUY" else -quantity
-
     sql = text("""
         INSERT INTO bronze.transactions
             (ticker, asset_name, asset_type, sector,
@@ -188,7 +154,6 @@ def insert_transaction(
             (:ticker, :asset_name, :asset_type, :sector,
              :quantity, :purchase_price, :purchase_date, :ingested_at, :user_id)
     """)
-
     try:
         with engine.begin() as conn:
             conn.execute(sql, {
@@ -209,7 +174,6 @@ def insert_transaction(
 
 
 def delete_transaction(transaction_id: str, user_id: str) -> bool:
-    """Hard-delete a single transaction by ID (corrections only)."""
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -220,6 +184,115 @@ def delete_transaction(transaction_id: str, user_id: str) -> bool:
     except Exception as e:
         st.error(f"Delete failed: {e}")
         return False
+
+# ---------------------------------------------------------------------------
+# DB helpers — analytics (gold schema)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=300)
+def fetch_ticker_kpis(user_id: str) -> pd.DataFrame:
+    """gold.gold_ticker_kpis — one row per ticker."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT
+                    ticker,
+                    asset_name,
+                    asset_type,
+                    total_portfolio_value,
+                    total_cost_basis,
+                    total_return_dollar,
+                    total_return_pct,
+                    weighted_sharpe,
+                    weighted_max_dd,
+                    first_buy_date,
+                    last_held_date
+                FROM gold.gold_ticker_kpis
+                WHERE user_id = :user_id
+            """), {"user_id": user_id})
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
+    except Exception as e:
+        st.error(f"Could not load ticker KPIs: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_portfolio_timeseries(user_id: str) -> pd.DataFrame:
+    """gold.gold_portfolio_timeseries — (price_date, ticker) grain."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT
+                    price_date,
+                    ticker,
+                    ticker_market_value,
+                    ticker_daily_return,
+                    ticker_drawdown
+                FROM gold.gold_portfolio_timeseries
+                WHERE user_id = :user_id
+                ORDER BY price_date
+            """), {"user_id": user_id})
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            if not df.empty:
+                df["price_date"] = pd.to_datetime(df["price_date"])
+            return df
+    except Exception as e:
+        st.error(f"Could not load portfolio timeseries: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_macro_context(user_id: str) -> pd.DataFrame:
+    """gold.gold_macro_context — (date, ticker) grain with macro columns."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT
+                    date,
+                    ticker,
+                    ticker_market_value,
+                    ticker_drawdown,
+                    macro_regime,
+                    yield_curve_slope,
+                    cpi,
+                    fed_funds_rate,
+                    real_fed_funds_rate,
+                    breakeven_inflation
+                FROM gold.gold_macro_context
+                WHERE user_id = :user_id
+                ORDER BY date
+            """), {"user_id": user_id})
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            if not df.empty:
+                df["date"] = pd.to_datetime(df["date"])
+            return df
+    except Exception as e:
+        st.error(f"Could not load macro context: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_regime_performance(user_id: str) -> pd.DataFrame:
+    """gold.gold_regime_performance — (ticker, macro_regime) grain."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT
+                    ticker,
+                    macro_regime,
+                    avg_daily_return,
+                    sharpe_in_regime,
+                    worst_drawdown_in_regime,
+                    trading_days_in_regime,
+                    insufficient_sample,
+                    return_tier
+                FROM gold.gold_regime_performance
+                WHERE user_id = :user_id
+            """), {"user_id": user_id})
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
+    except Exception as e:
+        st.error(f"Could not load regime performance: {e}")
+        return pd.DataFrame()
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -319,7 +392,6 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 if submit:
-    # ── 1. Basic field validation ──────────────────────────────────────────
     errors = []
     if not ticker:
         errors.append("Ticker is required.")
@@ -335,18 +407,14 @@ if submit:
     if errors:
         for err in errors:
             st.sidebar.error(err)
-
     else:
-        # ── 2. yfinance ticker validation ──────────────────────────────────
         with st.sidebar:
             with st.spinner(f"Validating {ticker} on yfinance…"):
                 is_valid, val_error = validate_ticker(ticker)
 
         if not is_valid:
             st.sidebar.error(f"❌ Invalid ticker: {val_error}")
-
         else:
-            # ── 3. Price backfill if ticker is new to bronze ───────────────
             needs_backfill = not ticker_exists_in_bronze(ticker)
 
             if needs_backfill:
@@ -360,15 +428,12 @@ if submit:
                 if bf_ok:
                     st.sidebar.info(f"📥 {bf_msg}")
                 else:
-                    # Warn but don't block — prices can be retried; the
-                    # transaction record itself is still valuable.
                     st.sidebar.warning(
                         f"⚠️ Price backfill had an issue: {bf_msg}\n\n"
                         "The transaction will still be recorded. Re-run "
                         "`ingest-raw-prices.py` to retry the price fetch."
                     )
 
-            # ── 4. Write the transaction ───────────────────────────────────
             success = insert_transaction(
                 ticker=ticker,
                 asset_name=asset_name,
@@ -393,11 +458,11 @@ if submit:
 
 tab1, tab2 = st.tabs(["Transactions", "Portfolio Analytics"])
 
-with tab1:
+# ===========================================================================
+# TAB 1 — Transaction Ledger
+# ===========================================================================
 
-    # ---------------------------------------------------------------------------
-    # Ledger view
-    # ---------------------------------------------------------------------------
+with tab1:
 
     st.subheader("Transaction Ledger")
 
@@ -428,29 +493,24 @@ with tab1:
 
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    # --- State Management ---
     if 'delete_confirm' not in st.session_state:
         st.session_state.delete_confirm = False
     if 'row_to_delete' not in st.session_state:
         st.session_state.row_to_delete = None
 
-    # ── Delete / correction tool ───────────────────────────────────────────
     with st.expander("🗑️ Delete a transaction (corrections only)"):
         st.warning(
             "This permanently removes the row from `bronze.transactions`. "
             "Use only to fix data entry mistakes."
         )
 
-        # 1. Input Field
         del_id = st.text_input("Transaction ID to delete", key="del_id_input")
 
-        # 2. Search Button
         if st.button("Search for Transaction", type="secondary"):
             if not del_id:
                 st.warning("Please enter an ID.")
             else:
                 with engine.connect() as conn:
-                    # We cast to str() here to ensure the placeholder :id is treated as a string
                     row = conn.execute(
                         text("SELECT * FROM bronze.transactions WHERE transaction_id = :id"),
                         {"id": str(del_id)}
@@ -460,11 +520,9 @@ with tab1:
                     st.error(f"No transaction with ID {del_id} found.")
                     st.session_state.delete_confirm = False
                 else:
-                    # Store row in state so it persists during the next rerun
                     st.session_state.row_to_delete = dict(row._mapping)
                     st.session_state.delete_confirm = True
 
-        # 3. Confirmation UI (Only shows if a row was found)
         if st.session_state.delete_confirm:
             st.divider()
             st.write("### Review Row for Deletion")
@@ -475,11 +533,9 @@ with tab1:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🔥 Confirm Permanent Delete", type="primary"):
-                    # Use the ID stored from our search
                     target_id = st.session_state.row_to_delete['transaction_id']
                     if delete_transaction(str(target_id), user_id):
                         st.success(f"Transaction {target_id} deleted.")
-                        # Reset state and refresh
                         st.session_state.delete_confirm = False
                         st.session_state.row_to_delete = None
                         st.rerun()
@@ -490,5 +546,388 @@ with tab1:
                     st.session_state.row_to_delete = None
                     st.rerun()
 
+# ===========================================================================
+# TAB 2 — Portfolio Analytics
+# ===========================================================================
+
 with tab2:
-    pass
+
+    # ── Load all gold data ──────────────────────────────────────────────────
+    kpis_df     = fetch_ticker_kpis(user_id)
+    ts_df       = fetch_portfolio_timeseries(user_id)
+    macro_df    = fetch_macro_context(user_id)
+    regime_df   = fetch_regime_performance(user_id)
+
+    if kpis_df.empty:
+        st.info("No portfolio data found. Add transactions and run dbt to populate the gold models.")
+        st.stop()
+
+    # ── Filters ─────────────────────────────────────────────────────────────
+    filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 4])
+
+    with filter_col1:
+        all_sectors = sorted(kpis_df["asset_name"].unique()) if "asset_name" in kpis_df.columns else []
+        # Pull sectors from timeseries if not in kpis
+        sector_options = sorted(kpis_df["asset_type"].dropna().unique().tolist())
+        selected_asset_types = st.multiselect(
+            "Asset Type",
+            options=sector_options,
+            placeholder="All types",
+            key="analytics_asset_type"
+        )
+
+    with filter_col2:
+        ticker_options_analytics = sorted(kpis_df["ticker"].dropna().unique().tolist())
+        selected_tickers = st.multiselect(
+            "Ticker",
+            options=ticker_options_analytics,
+            placeholder="All tickers",
+            key="analytics_ticker"
+        )
+
+    # Apply filters to kpis_df
+    filtered_kpis = kpis_df.copy()
+    if selected_asset_types:
+        filtered_kpis = filtered_kpis[filtered_kpis["asset_type"].isin(selected_asset_types)]
+    if selected_tickers:
+        filtered_kpis = filtered_kpis[filtered_kpis["ticker"].isin(selected_tickers)]
+
+    # Apply same ticker filter to other dataframes
+    active_tickers = filtered_kpis["ticker"].tolist()
+
+    filtered_ts     = ts_df[ts_df["ticker"].isin(active_tickers)]     if not ts_df.empty     else ts_df
+    filtered_macro  = macro_df[macro_df["ticker"].isin(active_tickers)] if not macro_df.empty  else macro_df
+    filtered_regime = regime_df[regime_df["ticker"].isin(active_tickers)] if not regime_df.empty else regime_df
+
+    st.divider()
+
+    # ── ROW 1: KPI Scorecards ───────────────────────────────────────────────
+    total_equity        = filtered_kpis["total_portfolio_value"].sum()
+    total_cost          = filtered_kpis["total_cost_basis"].sum()
+    total_pl            = filtered_kpis["total_return_dollar"].sum()
+    total_roi           = (total_pl / total_cost) if total_cost else 0
+    weighted_sharpe     = filtered_kpis["weighted_sharpe"].sum()
+    weighted_max_dd     = filtered_kpis["weighted_max_dd"].sum()
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+
+    k1.metric(
+        "Total Equity",
+        f"${total_equity:,.2f}",
+        help="Sum of current market value across all held positions"
+    )
+    k2.metric(
+        "Total ROI",
+        f"{total_roi * 100:.2f}%",
+        delta=f"{total_roi * 100:.2f}%",
+        delta_color="normal",
+        help="Total return as % of cost basis"
+    )
+    k3.metric(
+        "Total P/L",
+        f"${total_pl:,.2f}",
+        delta=f"${total_pl:,.2f}",
+        delta_color="normal",
+        help="Total return in dollars (market value − cost basis + sale proceeds)"
+    )
+    k4.metric(
+        "Weighted Sharpe",
+        f"{weighted_sharpe:.4f}",
+        help="Portfolio-weight-adjusted Sharpe ratio"
+    )
+    k5.metric(
+        "Weighted Max-DD",
+        f"{weighted_max_dd:.4f}",
+        delta=f"{weighted_max_dd:.4f}",
+        delta_color="inverse",
+        help="Portfolio-weight-adjusted maximum drawdown"
+    )
+
+    st.divider()
+
+    # ── ROW 2: Allocation pies + Return Comparison bar ──────────────────────
+    row2_col1, row2_col2, row2_col3 = st.columns(3)
+
+    with row2_col1:
+        st.subheader("Weighted Portfolio Allocation")
+        if not filtered_kpis.empty and filtered_kpis["total_portfolio_value"].sum() > 0:
+            pie_data = filtered_kpis[filtered_kpis["total_portfolio_value"] > 0]
+            fig_alloc = px.pie(
+                pie_data,
+                names="asset_name",
+                values="total_portfolio_value",
+                hole=0.0,
+                color_discrete_sequence=px.colors.qualitative.Set2,
+            )
+            fig_alloc.update_traces(textposition="outside", textinfo="percent+label")
+            fig_alloc.update_layout(
+                showlegend=False,
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=320,
+            )
+            st.plotly_chart(fig_alloc, use_container_width=True)
+        else:
+            st.info("No allocation data available.")
+
+    with row2_col2:
+        st.subheader("Asset Type Allocation")
+        if not filtered_kpis.empty and filtered_kpis["total_portfolio_value"].sum() > 0:
+            type_data = (
+                filtered_kpis[filtered_kpis["total_portfolio_value"] > 0]
+                .groupby("asset_type", as_index=False)["total_portfolio_value"]
+                .sum()
+            )
+            fig_type = px.pie(
+                type_data,
+                names="asset_type",
+                values="total_portfolio_value",
+                hole=0.0,
+                color_discrete_sequence=px.colors.qualitative.Pastel,
+            )
+            fig_type.update_traces(textposition="outside", textinfo="percent+label")
+            fig_type.update_layout(
+                showlegend=False,
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=320,
+            )
+            st.plotly_chart(fig_type, use_container_width=True)
+        else:
+            st.info("No asset type data available.")
+
+    with row2_col3:
+        st.subheader("Return Comparison")
+        if not filtered_kpis.empty:
+            ret_data = (
+                filtered_kpis[["asset_name", "total_return_dollar"]]
+                .dropna()
+                .sort_values("total_return_dollar")
+            )
+            fig_ret = px.bar(
+                ret_data,
+                x="total_return_dollar",
+                y="asset_name",
+                orientation="h",
+                color="total_return_dollar",
+                color_continuous_scale=["#d62728", "#aec7e8", "#2ca02c"],
+                color_continuous_midpoint=0,
+                labels={"total_return_dollar": "P/L ($)", "asset_name": ""},
+            )
+            fig_ret.update_layout(
+                coloraxis_showscale=False,
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=320,
+                xaxis_tickprefix="$",
+            )
+            st.plotly_chart(fig_ret, use_container_width=True)
+        else:
+            st.info("No return data available.")
+
+    st.divider()
+
+    # ── ROW 3: Portfolio Value + Drawdown over time ─────────────────────────
+    row3_col1, row3_col2 = st.columns(2)
+
+    with row3_col1:
+        st.subheader("Portfolio Value Over Time")
+        if not filtered_macro.empty:
+            # Aggregate to (date, macro_regime) — sum ticker_market_value across tickers
+            pv_data = (
+                filtered_macro
+                .groupby(["date", "macro_regime"], as_index=False)["ticker_market_value"]
+                .sum()
+            )
+            fig_pv = px.line(
+                pv_data,
+                x="date",
+                y="ticker_market_value",
+                color="macro_regime",
+                labels={"ticker_market_value": "Portfolio Value ($)", "date": "", "macro_regime": "Regime"},
+                color_discrete_sequence=px.colors.qualitative.Bold,
+            )
+            fig_pv.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=340,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                hovermode="x unified",
+            )
+            fig_pv.update_yaxes(tickprefix="$")
+            st.plotly_chart(fig_pv, use_container_width=True)
+        elif not filtered_ts.empty:
+            # Fallback: no macro data, just aggregate timeseries by date
+            pv_data = filtered_ts.groupby("price_date", as_index=False)["ticker_market_value"].sum()
+            fig_pv = px.line(
+                pv_data,
+                x="price_date",
+                y="ticker_market_value",
+                labels={"ticker_market_value": "Portfolio Value ($)", "price_date": ""},
+            )
+            fig_pv.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
+            fig_pv.update_yaxes(tickprefix="$")
+            st.plotly_chart(fig_pv, use_container_width=True)
+        else:
+            st.info("No timeseries data available.")
+
+    with row3_col2:
+        st.subheader("Portfolio Drawdown Over Time")
+        if not filtered_macro.empty:
+            # Avg drawdown across tickers per (date, macro_regime)
+            dd_data = (
+                filtered_macro
+                .groupby(["date", "macro_regime"], as_index=False)["ticker_drawdown"]
+                .mean()
+            )
+            fig_dd = px.line(
+                dd_data,
+                x="date",
+                y="ticker_drawdown",
+                color="macro_regime",
+                labels={"ticker_drawdown": "Drawdown", "date": "", "macro_regime": "Regime"},
+                color_discrete_sequence=px.colors.qualitative.Bold,
+            )
+            fig_dd.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=340,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                hovermode="x unified",
+            )
+            fig_dd.update_yaxes(tickformat=".1%")
+            # Shade the drawdown area
+            for regime in dd_data["macro_regime"].unique():
+                regime_slice = dd_data[dd_data["macro_regime"] == regime]
+                fig_dd.add_trace(go.Scatter(
+                    x=pd.concat([regime_slice["date"], regime_slice["date"].iloc[::-1]]),
+                    y=pd.concat([regime_slice["ticker_drawdown"], pd.Series([0] * len(regime_slice))]),
+                    fill="toself",
+                    fillcolor="rgba(214,39,40,0.08)",
+                    line=dict(color="rgba(255,255,255,0)"),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+            st.plotly_chart(fig_dd, use_container_width=True)
+        elif not filtered_ts.empty:
+            dd_data = filtered_ts.groupby("price_date", as_index=False)["ticker_drawdown"].mean()
+            fig_dd = px.line(
+                dd_data,
+                x="price_date",
+                y="ticker_drawdown",
+                labels={"ticker_drawdown": "Drawdown", "price_date": ""},
+            )
+            fig_dd.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
+            fig_dd.update_yaxes(tickformat=".1%")
+            st.plotly_chart(fig_dd, use_container_width=True)
+        else:
+            st.info("No drawdown data available.")
+
+    st.divider()
+
+    # ── ROW 4: Regime Heatmap + Yield Curve + CPI ───────────────────────────
+    row4_col1, row4_col2, row4_col3 = st.columns(3)
+
+    with row4_col1:
+        st.subheader("Regime Performance Heatmap")
+        if not filtered_regime.empty:
+            pivot = filtered_regime.pivot_table(
+                index="ticker",
+                columns="macro_regime",
+                values="avg_daily_return",
+                aggfunc="mean"
+            )
+            # Build a custom annotated heatmap
+            fig_hm = go.Figure(data=go.Heatmap(
+                z=pivot.values * 100,          # convert to %
+                x=pivot.columns.tolist(),
+                y=pivot.index.tolist(),
+                colorscale=[
+                    [0.0,  "#d62728"],
+                    [0.5,  "#1a1a2e"],
+                    [1.0,  "#ffffcc"],
+                ],
+                zmid=0,
+                text=[[f"{v:.3f}%" if not pd.isna(v) else "n/a" for v in row] for row in pivot.values * 100],
+                texttemplate="%{text}",
+                hovertemplate="Ticker: %{y}<br>Regime: %{x}<br>Avg daily return: %{z:.3f}%<extra></extra>",
+                colorbar=dict(title="Avg Daily Return %", thickness=12),
+            ))
+
+            # Grey out insufficient sample cells
+            if "insufficient_sample" in filtered_regime.columns:
+                insuf = filtered_regime[filtered_regime["insufficient_sample"] == True]
+                for _, row_i in insuf.iterrows():
+                    if row_i["ticker"] in pivot.index and row_i["macro_regime"] in pivot.columns:
+                        r_idx = pivot.index.tolist().index(row_i["ticker"])
+                        c_idx = pivot.columns.tolist().index(row_i["macro_regime"])
+                        fig_hm.add_shape(
+                            type="rect",
+                            x0=c_idx - 0.5, x1=c_idx + 0.5,
+                            y0=r_idx - 0.5, y1=r_idx + 0.5,
+                            fillcolor="rgba(100,100,100,0.5)",
+                            line=dict(width=0),
+                            layer="above",
+                        )
+
+            fig_hm.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=340,
+                xaxis=dict(side="bottom"),
+            )
+            st.plotly_chart(fig_hm, use_container_width=True)
+            st.caption("Grey cells = fewer than 20 trading days in that regime (unreliable statistics)")
+        else:
+            st.info("No regime performance data available.")
+
+    with row4_col2:
+        st.subheader("Yield Curve")
+        if not filtered_macro.empty and "yield_curve_slope" in filtered_macro.columns:
+            yc_data = (
+                filtered_macro
+                .groupby("date", as_index=False)["yield_curve_slope"]
+                .mean()
+                .sort_values("date")
+            )
+            fig_yc = px.line(
+                yc_data,
+                x="date",
+                y="yield_curve_slope",
+                labels={"yield_curve_slope": "Yield Curve Slope", "date": ""},
+                color_discrete_sequence=["#d62728"],
+            )
+            fig_yc.add_hline(
+                y=0,
+                line_dash="dash",
+                line_color="rgba(255,255,255,0.3)",
+                annotation_text="Inversion",
+                annotation_position="bottom right",
+            )
+            fig_yc.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=340,
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_yc, use_container_width=True)
+        else:
+            st.info("No yield curve data available.")
+
+    with row4_col3:
+        st.subheader("CPI")
+        if not filtered_macro.empty and "cpi" in filtered_macro.columns:
+            cpi_data = (
+                filtered_macro
+                .groupby("date", as_index=False)["cpi"]
+                .mean()
+                .sort_values("date")
+            )
+            fig_cpi = px.line(
+                cpi_data,
+                x="date",
+                y="cpi",
+                labels={"cpi": "CPI", "date": ""},
+                color_discrete_sequence=["#d62728"],
+            )
+            fig_cpi.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=340,
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_cpi, use_container_width=True)
+        else:
+            st.info("No CPI data available.")
